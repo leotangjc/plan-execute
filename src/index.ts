@@ -96,6 +96,8 @@ interface Meta {
   slug?: string
   updatedAt?: string
   compileLayer?: 'structure' | 'detail'
+  /** 任务状态结构化快照（record 写入；report 优先读它，免疫 md 执行状态手改）。 */
+  tasks?: Record<string, { status: string; reason?: string }>
 }
 
 export interface PlanToolDefinition {
@@ -447,7 +449,42 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
 
   // ============ execute ============
   async function buildReport(slug: string, exec?: ExecCtx): Promise<string> {
+    const meta = await readMeta(slug, exec)
     const plan = (await readFile(planPath(slug), exec)) || ''
+    const devSection = plan.split('## 偏差记录')[1] ?? ''
+    const deviations = devSection
+      .split('\n')
+      .map((l) => l.trim())
+      .filter((l) => l.startsWith('-'))
+      .map((l) => l.replace(/^-\s*/, ''))
+      .filter(Boolean)
+    const render = (counts: Record<string, number>, failed: string[], blocked: string[], hasTasks: boolean) => {
+      if (!hasTasks && deviations.length === 0) {
+        return '【里程碑报告】\n- 尚无执行状态记录。请用 record 参数写入任务状态（如 record="T1 done"）；「执行状态」节由工具写，勿手改。'
+      }
+      return [
+        '【里程碑报告】',
+        `- done: ${counts.done}`,
+        `- doing: ${counts.doing}`,
+        `- todo: ${counts.todo}`,
+        `- failed: ${counts.failed}${failed.length ? '（' + failed.join('；') + '）' : ''}`,
+        `- blocked: ${counts.blocked}${blocked.length ? '（' + blocked.join('；') + '）' : ''}`,
+        `- deviations: ${deviations.length}${deviations.length ? '（' + deviations.join('；') + '）' : ''}`,
+      ].join('\n')
+    }
+    // 结构化优先：record 写入的 meta.tasks 为事实源（对 md 执行状态手改免疫）；缺失时回退解析 md
+    if (meta && meta.tasks !== undefined) {
+      const counts: Record<string, number> = { done: 0, doing: 0, todo: 0, failed: 0, blocked: 0 }
+      const failed: string[] = []
+      const blocked: string[] = []
+      for (const [id, rec] of Object.entries(meta.tasks)) {
+        counts[rec.status] = (counts[rec.status] ?? 0) + 1
+        if (rec.status === 'failed') failed.push(`${id}: ${rec.reason || '(无描述)'}`)
+        if (rec.status === 'blocked') blocked.push(`${id}: ${rec.reason || '(无描述)'}`)
+      }
+      return render(counts, failed, blocked, Object.keys(meta.tasks).length > 0)
+    }
+    // —— 回退：解析 md 执行状态节（老数据 / 无 tasks 快照）——
     const section = (plan.split('## 执行状态')[1] ?? '').split(/^##\s/m)[0] ?? ''
     const lines = section.split('\n')
     const latest: Record<string, { status: string; reason: string }> = {}
@@ -472,25 +509,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     }
     counts.done += checkDone
     counts.todo += checkTodo
-    const devSection = plan.split('## 偏差记录')[1] ?? ''
-    const deviations = devSection
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('-'))
-      .map((l) => l.replace(/^-\s*/, ''))
-      .filter(Boolean)
-    if (Object.keys(latest).length + checkDone + checkTodo + deviations.length === 0) {
-      return '【里程碑报告】\n- 尚无执行状态记录。请用 record 参数写入任务状态（如 record="T1 done"）；「执行状态」节由工具写，勿手改。'
-    }
-    return [
-      '【里程碑报告】',
-      `- done: ${counts.done}`,
-      `- doing: ${counts.doing}`,
-      `- todo: ${counts.todo}`,
-      `- failed: ${counts.failed}${failed.length ? '（' + failed.join('；') + '）' : ''}`,
-      `- blocked: ${counts.blocked}${blocked.length ? '（' + blocked.join('；') + '）' : ''}`,
-      `- deviations: ${deviations.length}${deviations.length ? '（' + deviations.join('；') + '）' : ''}`,
-    ].join('\n')
+    return render(counts, failed, blocked, Object.keys(latest).length + checkDone + checkTodo > 0)
   }
 
   async function recordStatus(slug: string, record: string, exec?: ExecCtx): Promise<string> {
@@ -513,6 +532,11 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
       next = cur + '\n' + anchor + '\n' + line
     }
     await writeFile(planPath(slug), next, exec)
+    // 结构化快照：同步写进 meta.json（report 优先读它，免疫 md 执行状态手改）
+    const prev = (await readMeta(slug, exec)) || {}
+    const tasks = { ...(prev.tasks || {}) }
+    tasks[id] = { status, reason }
+    await writeMeta(slug, { ...prev, phase: prev.phase || 'execute', tasks }, exec)
     return `已记录：${id} → ${status}`
   }
 

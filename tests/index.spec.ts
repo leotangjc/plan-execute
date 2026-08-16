@@ -313,6 +313,27 @@ describe('execute 阶段', () => {
     expect(r.text).toContain('临时把验收标准从 A 改成 B')
   })
 
+  it('report 优先读 meta.tasks 结构化快照（md 手改执行状态不污染统计）', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await intoExecute(execute as never)
+
+    await execute({ action: 'answer', record: 'T1 done' })
+    await execute({ action: 'answer', record: 'T2 doing' })
+    expect(files.get('.plan/demo.meta.json')).toContain('"tasks"')
+
+    // 手改 md 执行状态节加一条假 done，结构化路径应免疫
+    const plan = files.get('.plan/demo.md')!
+    files.set('.plan/demo.md', plan.replace('## 执行状态', '## 执行状态\n- X done'))
+
+    const r = await execute({ action: 'report' })
+    expect(r.text).toContain('done: 1')
+    expect(r.text).toContain('doing: 1')
+    expect(r.text).not.toContain('X')
+  })
+
   it('「结束」置 done；start 检测到已有计划返回冲突提示（不覆盖）', async () => {
     const { service } = memFs()
     const { ctx, getRegistered } = makeCtx(service)
