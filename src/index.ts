@@ -65,7 +65,13 @@ export interface FsService {
     content: string,
     intent?: unknown,
     signal?: AbortSignal,
+    sandboxPolicy?: unknown,
   ): Promise<{ version?: unknown }>
+}
+
+/** 结构性镜像：沙箱策略服务（per-session policy，含 workspaceRoot）。 */
+export interface SandboxPolicyService {
+  resolve(opts?: { session?: unknown }): { mode?: string; workspaceRoot?: string } | undefined
 }
 
 /** 工具执行上下文的精简镜像。 */
@@ -224,6 +230,9 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
   if (fs === undefined) return
   const tools = ctx.get('tools') as ToolsService | undefined
   if (tools === undefined) return
+  // 沙箱策略服务（存在时）：写文件必须带 per-session 策略（workspaceRoot=会话 cwd），
+  // 否则沙箱回退部署默认策略、不含会话工作区 → workspace-write 下写被拒。
+  const policySvc = ctx.get('sandboxPolicy') as SandboxPolicyService | undefined
 
   const looseCtx = ctx as unknown as {
     emit: (name: string, ...args: unknown[]) => void
@@ -257,7 +266,9 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
   }
 
   async function writeFile(rel: string, content: string, exec?: ExecCtx): Promise<void> {
-    const target = await resolvePath(rel, exec)
+    const policy = policySvc?.resolve({ session: exec?.agent?.session })
+    const cwd = policy?.workspaceRoot ?? sessionCwd(exec)
+    const target = await fs!.resolve(rel, cwd !== undefined ? { cwd } : undefined)
     if (target === undefined) return
     const info = await fs!.stat(target, exec?.signal)
     emit(
@@ -267,7 +278,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
       exec,
     )
     const intent = await waterfall('fs/write-intent', target, exec, () => undefined)
-    const outcome = await fs!.writeText(target, content, intent, exec?.signal)
+    const outcome = await fs!.writeText(target, content, intent, exec?.signal, policy)
     emit('fs/observed', target, { kind: 'present', version: outcome.version }, exec)
   }
 

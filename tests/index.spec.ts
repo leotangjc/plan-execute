@@ -6,6 +6,7 @@ import type { ExecCtx, FsService, FsTarget, PlanExecuteConfig } from '../src/ind
 function memFs() {
   const files = new Map<string, string>()
   const cwdSeen: Array<string | undefined> = []
+  let lastPolicy: unknown
   const target = (rel: string): FsTarget => ({ targetKey: rel, displayPath: rel })
   const service: FsService = {
     async resolve(path: string, opts?: { cwd?: string }) {
@@ -20,15 +21,16 @@ function memFs() {
       if (v === undefined) throw new Error('ENOENT')
       return v
     },
-    async writeText(t: FsTarget, content: string) {
+    async writeText(t: FsTarget, content: string, _intent?: unknown, _signal?: unknown, policy?: unknown) {
       files.set(t.targetKey, content)
+      lastPolicy = policy
       return { version: 2 }
     },
   }
-  return { files, service, cwdSeen }
+  return { files, service, cwdSeen, getLastPolicy: () => lastPolicy }
 }
 
-function makeCtx(service: FsService, withSkills = false) {
+function makeCtx(service: FsService, withSkills = false, withPolicy = false) {
   let registered: {
     name?: string
     output?: { render?: (...a: unknown[]) => unknown }
@@ -47,11 +49,17 @@ function makeCtx(service: FsService, withSkills = false) {
       return () => {}
     },
   }
+  const policySvc = {
+    resolve() {
+      return { mode: 'workspace-write', workspaceRoot: '/ws' }
+    },
+  }
   const ctx = {
     get(name: string) {
       if (name === 'fs') return service
       if (name === 'tools') return tools
       if (name === 'skills' && withSkills) return skills
+      if (name === 'sandboxPolicy' && withPolicy) return policySvc
       return undefined
     },
     effect(cb: () => unknown) {
@@ -109,6 +117,17 @@ describe('dsh-plan-execute 插件契约', () => {
     apply(ctx, CONFIG)
     expect(getRegistered()!.name).toBe('plan_execute')
     expect(getSkill()).toBeNull()
+  })
+
+  it('写文件时携带 per-session 沙箱策略（workspaceRoot 作 cwd）', async () => {
+    const { service, getLastPolicy, cwdSeen } = memFs()
+    const { ctx, getRegistered } = makeCtx(service, false, true)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start', slug: 'x' })
+    expect(getLastPolicy()).toMatchObject({ mode: 'workspace-write', workspaceRoot: '/ws' })
+    expect(cwdSeen.some((c) => c === '/ws')).toBe(true)
   })
 })
 

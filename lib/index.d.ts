@@ -55,9 +55,18 @@ export interface FsService {
     }): Promise<FsTarget | undefined>;
     stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined>;
     readText(target: FsTarget, signal?: AbortSignal): Promise<string>;
-    writeText(target: FsTarget, content: string, intent?: unknown, signal?: AbortSignal): Promise<{
+    writeText(target: FsTarget, content: string, intent?: unknown, signal?: AbortSignal, sandboxPolicy?: unknown): Promise<{
         version?: unknown;
     }>;
+}
+/** 结构性镜像：沙箱策略服务（per-session policy，含 workspaceRoot）。 */
+export interface SandboxPolicyService {
+    resolve(opts?: {
+        session?: unknown;
+    }): {
+        mode?: string;
+        workspaceRoot?: string;
+    } | undefined;
 }
 /** 工具执行上下文的精简镜像。 */
 export interface ExecCtx {
