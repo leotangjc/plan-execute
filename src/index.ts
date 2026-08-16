@@ -285,11 +285,11 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     await writeFile(metaPath(slug), JSON.stringify(meta, null, 2), exec)
   }
 
-  /** 短哈希（djb2，6 位 hex）：纯非 ASCII 名（如中文）兜底为可读唯一 slug。 */
-  function hash6(text: string): string {
+  /** 短哈希（djb2，8 位 hex）：纯非 ASCII 名（如中文）兜底为可读唯一 slug。8 位在 5000 个项目下碰撞 ≈0.3%。 */
+  function hash8(text: string): string {
     let h = 5381
     for (const ch of text) h = ((h * 33) ^ ch.codePointAt(0)!) >>> 0
-    return h.toString(16).padStart(8, '0').slice(0, 6)
+    return h.toString(16).padStart(8, '0').slice(0, 8)
   }
 
   function pickSlug(slug?: string): string {
@@ -297,7 +297,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     const s = raw.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
     if (s) return s.slice(0, 64)
     // 空/缺省 → 默认 plan；纯非 ASCII（如中文项目名）→ plan-短哈希，避免全部坍缩成 plan 互相覆盖
-    return raw ? `plan-${hash6(raw)}` : config.defaultSlug
+    return raw ? `plan-${hash8(raw)}` : config.defaultSlug
   }
 
   function escapeReg(text: string): string {
@@ -315,11 +315,17 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     return n
   }
   function hitWord(text: string, words: readonly string[]): boolean {
+    const base = text.trim().replace(/[。．.！？!?，,、；;~～]+$/g, '').toLowerCase()
     const n = normalizeStop(text)
     const lower = words.map((w) => w.toLowerCase())
+    // 先精确匹配「去标点原文」（如「够了」不能因词尾“了”被剥掉而落空）
+    if (lower.includes(base)) return true
     if (lower.includes(n)) return true
-    // 口语重复强调：够了够了 / 结束结束
-    return lower.some((w) => n === w.repeat(2) || n === w.repeat(3))
+    // 口语重复强调：够了够了 / 结束结束（分别对去标点原文与剥语气词后文本比较）
+    return lower.some(
+      (w) =>
+        base === w.repeat(2) || base === w.repeat(3) || n === w.repeat(2) || n === w.repeat(3),
+    )
   }
   function hitAdvance(text: string): boolean {
     return hitWord(text, ADVANCE_WORDS)
@@ -353,7 +359,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
   function countBacklog(grill: string): number {
     const rest = grill.split('## Unresolved Backlog')[1] ?? ''
     const section = rest.split(/^##\s/m)[0] ?? ''
-    return section.split('\n').map((l) => l.trim()).filter((l) => l.startsWith('-')).length
+    return section.split('\n').map((l) => l.trim()).filter((l) => l.length > 1 && /^-(\s|\[)/.test(l) && !/^- \[x\]/i.test(l)).length
   }
 
   async function openCompile(slug: string, exec?: ExecCtx): Promise<StepResult> {
@@ -364,7 +370,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     const open = countBacklog(g)
     if (open > 0) {
       return {
-        text: `【编译计划】暂缓：Unresolved Backlog 尚有 ${open} 项未决。先与用户确认这些项（处理、忽略或移入计划「未决项映射」），并把对应行从 .grill 的 Unresolved Backlog 移除/标注，然后再说「结束」进入编译。`,
+        text: `【编译计划】暂缓：Unresolved Backlog 尚有 ${open} 项未决。先与用户确认这些项：已处理/忽略的可把行删掉或标成「- [x] …」，需带进计划的写进「未决项映射」；处理完（backlog 无未标 [x] 的项）后再说「结束」进入编译。`,
         nextAction: 'answer', phase: 'compile', slug,
       }
     }
@@ -504,7 +510,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     let checkDone = 0
     let checkTodo = 0
     for (const line of lines) {
-      const m = line.match(/^\s*[-*]\s+([^\s:：]+)\s*[:：]?\s*(doing|done|failed|blocked|todo)(?=\s|$)\s*(.*)$/)
+      const m = line.match(/^\s*[-*]\s+([^\s:：]+)\s*[:：]?\s*(doing|done|failed|blocked|todo)(?=[\s，,、；;]|$)\s*(.*)$/)
       if (m) {
         latest[m[1]] = { status: m[2], reason: m[3].trim().replace(/^[:：]\s*/, '') }
         continue
@@ -658,13 +664,13 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
         }
       }
       // 兼容旧版：纯中文项目名曾坍缩为 defaultSlug（'plan'）——新哈希 slug 无自身状态但旧 plan 有状态时提示续跑入口
-      if (/^plan-[0-9a-f]{6}$/.test(slug) && slug !== config.defaultSlug) {
+      if (/^plan-[0-9a-f]{6,8}$/.test(slug) && slug !== config.defaultSlug) {
         const legacyHasGrill = (await readFile(grillPath(config.defaultSlug), exec)) !== undefined
         const legacyHasPlan = (await readFile(planPath(config.defaultSlug), exec)) !== undefined
         if (legacyHasGrill || legacyHasPlan) {
           const ph: Phase = legacyHasPlan ? 'execute' : legacyHasGrill ? 'compile' : 'grill'
           return {
-            text: `检测到旧版默认计划「${config.defaultSlug}」的状态文件（${config.grillDir}/${config.defaultSlug}.md 等）——可能是旧版中文项目名落盘的。想续跑旧状态请显式传 slug=${config.defaultSlug} 并用 action=continue；想新建本计划「${slug}」请说「继续」。`,
+            text: `检测到旧版默认计划「${config.defaultSlug}」的状态文件（${config.grillDir}/${config.defaultSlug}.md 等）——可能是旧版中文项目名落盘的。想续跑旧状态请显式传 slug=${config.defaultSlug} 并用 action=continue；想新建本计划「${slug}」请重新 action=start（或换一个 ASCII 项目名）。`,
             nextAction: 'continue', phase: ph, slug,
           }
         }

@@ -328,7 +328,7 @@ describe('v2.1 防碰撞与语义', () => {
     const execute = await executeOf(getRegistered())
 
     const a = await execute({ action: 'start', slug: '记账项目' })
-    expect(a.slug).toMatch(/^plan-[0-9a-f]{6}$/)
+    expect(a.slug).toMatch(/^plan-[0-9a-f]{6,8}$/)
 
     const b = await execute({ action: 'start', slug: '任务安排' })
     expect(b.slug).not.toBe(a.slug)
@@ -366,10 +366,40 @@ describe('v2.1 防碰撞与语义', () => {
     expect(blocked.text).toContain('暂缓')
     expect(files.has('.plan/demo.md')).toBe(false)
 
-    files.set('.grill/demo.md', files.get('.grill/demo.md')!.replace('- 平台选型未定\n', ''))
+    files.set('.grill/demo.md', files.get('.grill/demo.md')!.replace('- 平台选型未定\n', '- [x] 平台选型未定（已处理）\n'))
     const ok = await execute({ action: 'answer', answer: '结束' })
     expect(ok.text).toContain('编译计划')
     expect(files.has('.plan/demo.md')).toBe(true)
+  })
+
+  it('停止词变体：够了/够了够了 触发推进（回归防护）', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    let n = 0
+    for (const w of ['够了', '够了够了', '结束了']) {
+      n += 1
+      await execute({ action: 'start', slug: `t${n}` })
+      const r = await execute({ action: 'answer', answer: w })
+      expect(r.phase).toBe('compile')
+    }
+  })
+
+  it('暂停变体停留本阶段（回归防护）', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start', slug: 'p1' })
+    for (const w of ['暂停', '暂停一下', '先停一下', '停']) {
+      const r = await execute({ action: 'answer', answer: w })
+      expect(r.phase).toBe('grill')
+    }
+    const end = await execute({ action: 'answer', answer: '结束' })
+    expect(end.phase).toBe('compile')
   })
 
   it('report 统计无冒号手写行，且偏差节不混入执行状态', async () => {
