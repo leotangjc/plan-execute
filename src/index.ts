@@ -15,6 +15,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { buildSkillContent } from './skill-content.js'
+import { VERSION } from './version.js'
 
 export const name = 'dsh-plan-execute'
 
@@ -96,11 +97,16 @@ interface Meta {
   slug?: string
   updatedAt?: string
   compileLayer?: 'structure' | 'detail'
+  /** 元数据 schema 版本：2 = 结构化快照（tasks/deviations 为 report 唯一事实源）。旧版（无 schema/1）无快照。 */
+  schema?: number
   /** 任务状态结构化快照（record 写入；report 唯一事实源，md 执行状态节仅展示）。 */
   tasks?: Record<string, { status: string; reason?: string }>
   /** 偏差记录结构化列表（deviation 写入；report 唯一事实源，md 偏差记录节仅展示）。 */
   deviations?: string[]
 }
+
+/** 当前元数据 schema 版本。 */
+const META_SCHEMA = 2
 
 export interface PlanToolDefinition {
   name: string
@@ -224,6 +230,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
   }
   async function writeMeta(slug: string, meta: Meta, exec?: ExecCtx): Promise<void> {
     meta.updatedAt = new Date().toISOString()
+    meta.schema = META_SCHEMA
     await writeFile(metaPath(slug), JSON.stringify(meta, null, 2), exec)
   }
 
@@ -454,6 +461,10 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     // 完整版 P1A：统计只来自 meta.json 结构化快照（record/deviation 写入），
     // 不再解析 md —— 执行状态/偏差记录节仅展示，任何手改都不影响报告。
     const meta = await readMeta(slug, exec)
+    // schema 守卫：明确比当前 schema 旧的元数据 → 不静默走老逻辑，提示重写
+    if (meta && meta.schema !== undefined && meta.schema < META_SCHEMA) {
+      return `【里程碑报告】v${VERSION}\n- 此计划由旧版创建（schema ${meta.schema}，无结构化快照）。请用 record 参数重新写入任务状态（如 record="T1 done"）后查看报告。`
+    }
     const tasks = meta?.tasks ?? {}
     const deviations = meta?.deviations ?? []
     const counts: Record<string, number> = { done: 0, doing: 0, todo: 0, failed: 0, blocked: 0 }
@@ -465,10 +476,10 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
       if (rec.status === 'blocked') blocked.push(`${id}: ${rec.reason || '(无描述)'}`)
     }
     if (Object.keys(tasks).length + deviations.length === 0) {
-      return '【里程碑报告】\n- 尚无执行状态记录。请用 record 参数写入任务状态（如 record="T1 done"）；「执行状态」节由工具写，勿手改。'
+      return `【里程碑报告】v${VERSION}\n- 尚无执行状态记录。请用 record 参数写入任务状态（如 record="T1 done"）；「执行状态」节由工具写，勿手改。`
     }
     return [
-      '【里程碑报告】',
+      `【里程碑报告】v${VERSION}`,
       `- done: ${counts.done}`,
       `- doing: ${counts.doing}`,
       `- todo: ${counts.todo}`,
@@ -503,7 +514,9 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     const tasks = { ...(prev.tasks || {}) }
     tasks[id] = { status, reason }
     await writeMeta(slug, { ...prev, phase: prev.phase || 'execute', tasks }, exec)
-    return `已记录：${id} → ${status}`
+    const c: Record<string, number> = { done: 0, doing: 0, todo: 0, failed: 0, blocked: 0 }
+    for (const r of Object.values(tasks)) c[r.status] = (c[r.status] ?? 0) + 1
+    return `已记录：${id} → ${status}（当前 done ${c.done} · failed ${c.failed} · blocked ${c.blocked} · todo ${c.todo} · doing ${c.doing}）`
   }
 
   async function recordDeviation(slug: string, text: string, exec?: ExecCtx): Promise<string> {
@@ -516,7 +529,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     const prev = (await readMeta(slug, exec)) || {}
     const deviations = [...(prev.deviations || []), text.trim()]
     await writeMeta(slug, { ...prev, phase: prev.phase || 'execute', deviations }, exec)
-    return `已记录偏差：${text.trim()}`
+    return `已记录偏差：${text.trim()}（累计 ${deviations.length} 条）`
   }
 
   async function executeAction(
@@ -553,7 +566,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
   }
 
   // ============ 总入口 ============
-  async function run(args: Record<string, unknown>, exec: ExecCtx): Promise<StepResult> {
+  async function runCore(args: Record<string, unknown>, exec: ExecCtx): Promise<StepResult> {
     const action = typeof args.action === 'string' ? args.action : 'start'
     const explicitSlug = typeof args.slug === 'string' && args.slug.trim() !== '' ? args.slug : undefined
     // slug 解析：start 无 slug → 默认；显式 → 用之并刷新指针；非 start 无 slug → 指针兜底（校验状态存在），否则默认。
@@ -574,6 +587,20 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     const content = typeof args.content === 'string' ? args.content : undefined
     const deviation = typeof args.deviation === 'string' ? args.deviation : undefined
     const phase = typeof args.phase === 'string' ? (args.phase as Phase) : undefined
+
+    // —— 参数组合前置校验：错误组合立即响亮失败，不产生坏状态 ——
+    if (section !== undefined && content === undefined) {
+      return { text: '参数错误：section 需要搭配 content 一起传。', nextAction: 'continue', phase: phase ?? 'compile', slug }
+    }
+    if (content !== undefined && section === undefined) {
+      return { text: '参数错误：content 需要搭配 section 一起传。', nextAction: 'continue', phase: phase ?? 'compile', slug }
+    }
+    if (record !== undefined && section !== undefined) {
+      return { text: '参数错误：record（记任务状态）与 section（写计划字段）不能同时使用。', nextAction: 'answer', phase: phase ?? 'execute', slug }
+    }
+    if (record !== undefined && deviation !== undefined) {
+      return { text: '参数错误：record 与 deviation 不能同时使用，请分开调用。', nextAction: 'answer', phase: phase ?? 'execute', slug }
+    }
 
     if (action === 'report') {
       const meta = await readMeta(slug, exec)
@@ -636,11 +663,23 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     return { text: '无法判定阶段。', nextAction: 'start', phase: 'grill', slug }
   }
 
+  // 审计日志：每次调用 append 一行到 .plan/<slug>.log（尽力而为，写失败不影响主流程）
+  async function appendLog(action: string, result: StepResult, exec?: ExecCtx): Promise<void> {
+    const line = `${new Date().toISOString()} | ${action} | ${result.slug} | →${result.phase} | ${result.text.slice(0, 60).replace(/\n/g, ' ')}\n`
+    const prev = (await readFile(`${config.planDir}/${result.slug}.log`, exec)) || ''
+    await writeFile(`${config.planDir}/${result.slug}.log`, prev + line, exec)
+  }
+  async function run(args: Record<string, unknown>, exec: ExecCtx): Promise<StepResult> {
+    const result = await runCore(args, exec)
+    await appendLog(typeof args.action === 'string' ? args.action : 'start', result, exec).catch(() => {})
+    return result
+  }
+
   const disposeTool = tools.register({
     name: 'plan_execute',
     description: (config.autoTrigger
-      ? '「计划实施」三合一编排引擎的记账本（状态机）：拷问决策(grill)→编译计划(compile)→执行验收(execute)。先用 skill 工具加载 plan-workflow 获取完整流程与提问策略，再驱动本工具。触发：用户提出需求模糊/多步骤/项目级的新任务时，默认先调用本工具进入「拷问决策」确认需求，未经确认不得直接动手；用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时同样调用；简单明确、一步可完成的请求不必调用；用户明确说「直接做/不用确认/跳过流程」时跳过本流程。多步驱动(action=start/answer/continue/report/stop)；说「结束」结束当前阶段，说「暂停」停留在本阶段；主 agent 用 question 喂题、section+content 写计划字段、record/deviation 回写执行状态。'
-      : '「计划实施」三合一编排引擎的记账本（状态机）：拷问决策(grill)→编译计划(compile)→执行验收(execute)。先用 skill 工具加载 plan-workflow 获取完整流程与提问策略，再驱动本工具。触发：仅当用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时调用本工具；用户明确说「直接做/不用确认/跳过流程」时跳过本流程。多步驱动(action=start/answer/continue/report/stop)；说「结束」结束当前阶段，说「暂停」停留在本阶段；主 agent 用 question 喂题、section+content 写计划字段、record/deviation 回写执行状态。'),
+      ? '「计划实施」三合一编排引擎的记账本（状态机）：拷问决策(grill)→编译计划(compile)→执行验收(execute)。先用 skill 工具加载 plan-workflow 获取完整流程与提问策略，再驱动本工具。触发：用户提出需求模糊/多步骤/项目级的新任务时，默认先调用本工具进入「拷问决策」确认需求，未经确认不得直接动手；用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时同样调用；简单明确、一步可完成的请求不必调用；用户明确说「直接做/不用确认/跳过流程」时跳过本流程。多步驱动(action=start/answer/continue/report/stop)；说「结束」结束当前阶段，说「暂停」停留在本阶段；主 agent 用 question 喂题、section+content 写计划字段、record/deviation 回写执行状态。 引擎 v' + VERSION + '。'
+      : '「计划实施」三合一编排引擎的记账本（状态机）：拷问决策(grill)→编译计划(compile)→执行验收(execute)。先用 skill 工具加载 plan-workflow 获取完整流程与提问策略，再驱动本工具。触发：仅当用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时调用本工具；用户明确说「直接做/不用确认/跳过流程」时跳过本流程。多步驱动(action=start/answer/continue/report/stop)；说「结束」结束当前阶段，说「暂停」停留在本阶段；主 agent 用 question 喂题、section+content 写计划字段、record/deviation 回写执行状态。 引擎 v' + VERSION + '。'),
     parameters: {
       type: 'object',
       additionalProperties: false,

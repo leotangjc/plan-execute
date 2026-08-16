@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { apply, inject, name } from '../src/index.ts'
+import { buildSkillContent } from '../src/skill-content.ts'
+import { VERSION } from '../src/version.ts'
 import type { ExecCtx, FsService, FsTarget, PlanExecuteConfig } from '../src/index.ts'
 
 /** 内存版 fs 服务：镜像真实服务语义（缺失 readText 抛错、stat 返回 undefined）。 */
@@ -531,5 +535,87 @@ describe('v2.1 防碰撞与语义', () => {
     )
     const r = await execute({ action: 'answer', question: '第一个问题', answer: '答复A' })
     expect(files.get('.grill/demo.md')).toContain('- Q1：第一个问题')
+  })
+})
+
+describe('防御设计（批次1+2）', () => {
+  it('VERSION 与 package.json 同步（防双源漂移）', () => {
+    const pkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'))
+    expect(VERSION).toBe(pkg.version)
+  })
+
+  it('工具描述与报告首行带引擎版本指纹', async () => {
+    const { ctx, getRegistered } = makeCtx(memFs().service)
+    apply(ctx, CONFIG)
+    expect(getRegistered()!.description).toContain(`引擎 v${VERSION}`)
+  })
+
+  it('参数组合前置校验：非法组合响亮失败且不落盘', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    const r1 = await execute({ action: 'answer', section: '任务列表' }) // section 无 content
+    expect(r1.text).toContain('参数错误')
+
+    const r2 = await execute({ action: 'answer', content: 'x' }) // content 无 section
+    expect(r2.text).toContain('参数错误')
+
+    await execute({ action: 'start' })
+    const r3 = await execute({ action: 'answer', record: 'T1 done', section: '任务列表', content: '- T1' }) // record+section
+    expect(r3.text).toContain('参数错误')
+
+    const r4 = await execute({ action: 'answer', record: 'T1 done', deviation: '偏差' }) // record+deviation
+    expect(r4.text).toContain('参数错误')
+
+    expect(files.has('.plan/demo.md')).toBe(false) // 校验失败未产生计划文件
+  })
+
+  it('record 返回附状态摘要', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await execute({ action: 'start' })
+    await execute({ action: 'answer', answer: '结束' })
+    await execute({ action: 'answer', answer: '结构 OK' })
+    await execute({ action: 'answer', answer: '细节 OK' })
+
+    const r = await execute({ action: 'answer', record: 'T1 done' })
+    expect(r.text).toContain('当前 done 1')
+  })
+
+  it('审计日志：每次调用追加到 .plan/<slug>.log', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start' })
+    await execute({ action: 'answer', question: 'Q1?', answer: 'A1' })
+    const log = files.get('.plan/demo.log')!
+    expect(log).toContain('| start | demo |')
+    expect(log).toContain('| answer | demo |')
+  })
+
+  it('writeMeta 写入 schema:2；旧版 schema 元数据报告给出明确提示', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start' })
+    expect(files.get('.plan/demo.meta.json')).toContain('"schema": 2')
+
+    // 构造 schema:1 旧版元数据 → 报告提示旧版
+    files.set('.plan/demo.meta.json', JSON.stringify({ phase: 'execute', slug: 'demo', schema: 1 }))
+    const r = await execute({ action: 'report' })
+    expect(r.text).toContain('旧版创建')
+  })
+
+  it('skill 正文快照（防无意识文案漂移）', () => {
+    expect(buildSkillContent(true)).toMatchSnapshot('autoTrigger-true')
+    expect(buildSkillContent(false)).toMatchSnapshot('autoTrigger-false')
   })
 })

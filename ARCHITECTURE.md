@@ -40,7 +40,8 @@ compile 第二层确认 → 工具切 execute；execute「结束」→ done（�
                         六字段用 section+content 写；确认记录/执行状态/偏差记录由工具写
 .plan/<slug>.meta.json  阶段指针 + 任务/偏差结构化快照（机器读，report 唯一事实源；
                         tasks/deviations 由 record/deviation 写；md 执行状态/偏差记录节仅展示；
-                        老计划无快照时报告显示暂无状态）
+                        老计划无快照时报告显示暂无状态；含 schema 版本，旧版元数据给明确提示）
+.plan/<slug>.log        审计日志（每次调用 append 一行；机器/排错用）
 .plan/.current          活动 slug 指针（机器读）：非 start 调用漏传 slug 时兜底用最近一次的计划，
                         仅当该 slug 确有状态文件时生效，否则回默认（防记错计划）
 ```
@@ -88,3 +89,12 @@ compile 第二层确认 → 工具切 execute；execute「结束」→ done（�
 - 不新增「配置旋钮」：maxGrillQuestions / stopWords 可配置 / reportStyle 均为 YAGNI（对抗审查证伪），停止词与流程语义用内置规则修；
 - 不保留中文 slug（保 ASCII + 哈希兜底：中文项目名 → plan-短哈希；可读性靠 skill 建议 ASCII 命名）；
 - 非 execute 阶段 report 只给阶段指针，不输出决策摘要（避免每轮一屏噪音）。
+
+## 9. 防御设计（批次1+2）
+
+- 版本指纹：`src/version.ts` 导出 VERSION，工具描述与报告首行带 `v<版本>`；**改 package.json 版本号时必须同步 src/version.ts**（测试断言两者一致）。
+- 参数组合前置校验：section↔content 成对、record/section/deviation 互斥，非法组合立即报错不落盘。
+- 状态摘要：record/deviation 返回附当前计数，供模型自纠。
+- schema 守卫：writeMeta 一律写 `schema: 2`；比当前 schema 旧的元数据在报告时给出明确提示（不静默走老逻辑）。
+- 审计日志：每次调用 append 到 `.plan/<slug>.log`。
+- skill 正文快照测试：`buildSkillContent(true/false)` 有 snapshot，改文案需显式 `-u` 更新。
