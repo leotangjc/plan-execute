@@ -129,6 +129,34 @@ describe('dsh-plan-execute 插件契约', () => {
     expect(getLastPolicy()).toMatchObject({ mode: 'workspace-write', workspaceRoot: '/ws' })
     expect(cwdSeen.some((c) => c === '/ws')).toBe(true)
   })
+
+  it('非 start 漏传 slug 时兜底用最近一次计划（活动 slug 指针）', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG) // defaultSlug 'demo'
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start', slug: 'abc' }) // 建立 abc 并写指针
+    const r = await execute({ action: 'answer', question: 'Q1?', answer: 'A' }) // 漏了 slug
+    expect(r.slug).toBe('abc')
+    expect(files.has('.grill/abc.md')).toBe(true)
+  })
+
+  it('指针失效（所指计划无状态）时回默认，不静默用过期指针', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start', slug: 'staleplan' }) // 指针=staleplan，有状态
+    const r = await execute({ action: 'report' })
+    expect(r.slug).toBe('staleplan')
+
+    files.delete('.grill/staleplan.md')
+    files.delete('.plan/staleplan.meta.json')
+    const r2 = await execute({ action: 'report' }) // 状态没了 → 回默认 demo
+    expect(r2.slug).toBe('demo')
+  })
 })
 
 describe('grill 阶段', () => {

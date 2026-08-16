@@ -37,6 +37,8 @@ compile 第二层确认 → 工具切 execute；execute「结束」→ done（�
                         + 确认记录 + 执行状态 + 偏差记录
                         六字段用 section+content 写；确认记录/执行状态/偏差记录由工具写
 .plan/<slug>.meta.json  阶段指针（机器读）
+.plan/.current          活动 slug 指针（机器读）：非 start 调用漏传 slug 时兜底用最近一次的计划，
+                        仅当该 slug 确有状态文件时生效，否则回默认（防记错计划）
 ```
 
 不对称原则：交给别人/别的 agent 消费的文件（`.plan` 六字段）需要格式强约束 → 工具写；
