@@ -28,6 +28,13 @@ dsh plugin --profile web add github:leotangjc/plan-execute
 
 > `--profile` 填你实际用的 profile（`web` / `tui` / 自定义名）。装完**重启 DSH**，就能用了。
 
+**GitHub 直连不通时（大陆网络）**，镜像 clone 到本地再装：
+
+```bash
+git clone --depth 1 https://ghfast.top/https://github.com/leotangjc/plan-execute.git && cd plan-execute
+dsh plugin --profile web add .
+```
+
 ### ⚠️ 安装可能踩的三个坑（实测）
 
 1. **被沙箱拦住**：`dsh plugin add` 要写 `~/.dsh/profiles/`（在你的工作目录之外），首次可能报 `EPERM` 或 `file access denied`。用 `danger-full-access` 权限重跑同一条命令即可。
