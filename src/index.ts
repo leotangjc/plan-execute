@@ -28,6 +28,8 @@ export interface PlanExecuteConfig {
   grillDir?: string
   /** 执行计划与阶段指针目录（缺省 '.plan'） */
   planDir?: string
+  /** 默认触发模式：需求模糊/多步骤/项目级新任务默认进入流程（true），否则仅触发词触发（false）。缺省 true。 */
+  autoTrigger?: boolean
 }
 
 /** 结构性镜像：DSH tools 注册表。 */
@@ -115,18 +117,24 @@ function planHead(slug: string, grillDir: string): string {
   return `# 执行计划: ${slug}\n\n> 输入来源: ${grillDir}/${slug}.md\n\n## 任务列表\n\n## 依赖图\n\n## 验收标准\n\n## 风险与假设\n\n## 未决项映射\n\n## 里程碑\n\n## 确认记录\n\n## 执行状态\n\n## 偏差记录\n`
 }
 
-/** 编排大脑 plan-workflow 的正文（随包内嵌，避免双源漂移）。 */
-const SKILL_CONTENT = `# Role
+/** 编排大脑 plan-workflow 的正文（随包内嵌，避免双源漂移）。触发节按 autoTrigger 配置切换。 */
+const TRIGGER_DEFAULT = `- 用户提出【需求模糊 / 多步骤 / 项目级】的新任务 → 默认进入本流程：先 plan_execute(action=start) 确认需求，再逐题拷问；
+- 用户说出「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」→ 直接进入；
+- 简单明确、一步可完成的请求（查资料、问问题、改个小文件）→ 不进入，直接做；
+- 用户明确说「直接做 / 不用确认 / 跳过流程」→ 不进入，直接做。`
+const TRIGGER_PHRASE_ONLY = `- 仅当用户说出「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时进入本流程；
+- 其余任务直接执行；用户明确说「直接做 / 不用确认 / 跳过流程」时同样跳过。`
+
+function buildSkillContent(autoTrigger: boolean): string {
+  const trigger = autoTrigger ? TRIGGER_DEFAULT : TRIGGER_PHRASE_ONLY
+  return `# Role
 你是「计划实施」流程的编排者兼主执行者。用户是唯一决策者，你永不替用户做决定。
 你负责「想」：读代码、追问、抓矛盾、生成计划、判断验收、执行纪律；
 plan_execute 工具负责「记」：阶段指针、Q/A、计划字段、任务状态、里程碑报告——它不懂内容，只做可靠记录。
 全程用中文与用户对话：提问、确认、说明、报告一律中文。
 
 # 触发决策（先判断，再行动）
-- 用户提出【需求模糊 / 多步骤 / 项目级】的新任务 → 默认进入本流程：先 plan_execute(action=start) 确认需求，再逐题拷问；
-- 用户说出「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」→ 直接进入；
-- 简单明确、一步可完成的请求（查资料、问问题、改个小文件）→ 不进入，直接做；
-- 用户明确说「直接做 / 不用确认 / 跳过流程」→ 不进入，直接做。
+${trigger}
 
 # 回合纪律（防自问自答，务必遵守）
 - 每轮只推进一个动作：要么问用户一题，要么记录用户刚回答的一题，要么确认一层结构/细节；
@@ -194,12 +202,14 @@ grill（拷问决策）→ compile（编译计划）→ execute（执行验收�
 .grill/<slug>.md      三段：Confirmed Decisions / Constraints & Risks / Unresolved Backlog
 .plan/<slug>.md       六字段 + 确认记录 + 执行状态 + 偏差记录
 .plan/<slug>.meta.json  阶段指针（机器读）`
+}
 
 export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
   const config = {
     defaultSlug: 'plan',
     grillDir: '.grill',
     planDir: '.plan',
+    autoTrigger: true,
     ..._config,
   }
   const fs = ctx.get('fs') as FsService | undefined
@@ -606,8 +616,9 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
 
   const disposeTool = tools.register({
     name: 'plan_execute',
-    description:
-      '「计划实施」三合一编排引擎的记账本（状态机）：拷问决策(grill)→编译计划(compile)→执行验收(execute)。先用 skill 工具加载 plan-workflow 获取完整流程与提问策略，再驱动本工具。触发：用户提出需求模糊/多步骤/项目级的新任务时，默认先调用本工具进入「拷问决策」确认需求，未经确认不得直接动手；用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时同样调用；简单明确、一步可完成的请求不必调用；用户明确说「直接做/不用确认/跳过流程」时跳过本流程。多步驱动(action=start/answer/continue/report/stop)；主 agent 用 question 喂题、section+content 写计划字段、record/deviation 回写执行状态。',
+    description: (config.autoTrigger
+      ? '「计划实施」三合一编排引擎的记账本（状态机）：拷问决策(grill)→编译计划(compile)→执行验收(execute)。先用 skill 工具加载 plan-workflow 获取完整流程与提问策略，再驱动本工具。触发：用户提出需求模糊/多步骤/项目级的新任务时，默认先调用本工具进入「拷问决策」确认需求，未经确认不得直接动手；用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时同样调用；简单明确、一步可完成的请求不必调用；用户明确说「直接做/不用确认/跳过流程」时跳过本流程。多步驱动(action=start/answer/continue/report/stop)；主 agent 用 question 喂题、section+content 写计划字段、record/deviation 回写执行状态。'
+      : '「计划实施」三合一编排引擎的记账本（状态机）：拷问决策(grill)→编译计划(compile)→执行验收(execute)。先用 skill 工具加载 plan-workflow 获取完整流程与提问策略，再驱动本工具。触发：仅当用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时调用本工具；用户明确说「直接做/不用确认/跳过流程」时跳过本流程。多步驱动(action=start/answer/continue/report/stop)；主 agent 用 question 喂题、section+content 写计划字段、record/deviation 回写执行状态。'),
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -650,9 +661,11 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     const disposeSkill = skills.register({
       name: 'plan-workflow',
       description: '「计划实施」三合一编排流程的大脑：拷问决策→编译计划→执行验收，配合 plan_execute 工具落盘。',
-      whenToUse: '用户提出需求模糊、多步骤或项目级的新任务时（除非用户明确说「直接做/不用确认/跳过流程」），或说出「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时，加载本 skill 并驱动 plan_execute 工具。',
+      whenToUse: config.autoTrigger
+        ? '用户提出需求模糊、多步骤或项目级的新任务时（除非用户明确说「直接做/不用确认/跳过流程」），或说出「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时，加载本 skill 并驱动 plan_execute 工具。'
+        : '当用户说「计划实施」「拷问决策」「编译计划」「执行计划」「跑计划」时加载本 skill 并驱动 plan_execute 工具。',
       source: 'bundled',
-      content: SKILL_CONTENT,
+      content: buildSkillContent(config.autoTrigger),
     })
     ctx.effect(() => disposeSkill)
   }

@@ -24,6 +24,8 @@ export interface PlanExecuteConfig {
     grillDir?: string;
     /** 执行计划与阶段指针目录（缺省 '.plan'） */
     planDir?: string;
+    /** 默认触发模式：需求模糊/多步骤/项目级新任务默认进入流程（true），否则仅触发词触发（false）。缺省 true。 */
+    autoTrigger?: boolean;
 }
 /** 结构性镜像：DSH tools 注册表。 */
 export interface ToolsService {
