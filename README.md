@@ -35,6 +35,10 @@ git clone --depth 1 https://ghfast.top/https://github.com/leotangjc/plan-execute
 dsh plugin --profile web add .
 ```
 
+> `ghfast.top` 这类镜像域名会不定期失效，克隆失败就换任意可用的 GitHub 加速镜像，命令结构不变。
+
+> 装完**保留这个 clone 目录**：本地安装是 `file:` 依赖，删了插件就断，也不会像 `add github:...` 那样自动升级（想升级就重新 clone + 重新 add）。
+
 ### ⚠️ 安装可能踩的三个坑（实测）
 
 1. **被沙箱拦住**：`dsh plugin add` 要写 `~/.dsh/profiles/`（在你的工作目录之外），首次可能报 `EPERM` 或 `file access denied`。用 `danger-full-access` 权限重跑同一条命令即可。
