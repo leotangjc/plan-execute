@@ -110,7 +110,7 @@ export interface PlanToolDefinition {
 const PHASES: readonly Phase[] = ['grill', 'compile', 'execute', 'done']
 const ADVANCE_WORDS = ['结束', '够了', '结束拷问', 'stop', 'done']
 const PAUSE_WORDS = ['暂停', '停', '先暂停', '先停']
-const TRAILING_PARTICLES = /[了吧啊呀哈呢哦嘛]+$/
+const TRAILING_PARTICLES = /[了吧啊呀哈呢哦嘛啦咯喽呗哟哇]+$/
 const GRILL_SKELETON =
   '# 拷问决策记录\n\n## Confirmed Decisions\n\n## Constraints & Risks\n\n## Unresolved Backlog\n'
 const VALID_SECTIONS = ['任务列表', '依赖图', '验收标准', '风险与假设', '未决项映射', '里程碑'] as const
@@ -304,10 +304,10 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
 
-  /** 归一化：去尾部标点，循环剥语气词/「一下」（最多 4 轮），返回可比较文本。 */
+  /** 归一化：去尾部标点，循环剥语气词/「一下」（最多 5 轮），返回可比较文本。 */
   function normalizeStop(text: string): string {
     let n = text.trim().replace(/[。．.！？!?，,、；;~～]+$/g, '').toLowerCase()
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 5; i++) {
       if (TRAILING_PARTICLES.test(n)) n = n.slice(0, -1)
       else if (n.endsWith('一下')) n = n.slice(0, -2)
       else break
@@ -315,16 +315,22 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     return n
   }
   function hitWord(text: string, words: readonly string[]): boolean {
-    const base = text.trim().replace(/[。．.！？!?，,、；;~～]+$/g, '').toLowerCase()
-    const n = normalizeStop(text)
     const lower = words.map((w) => w.toLowerCase())
-    // 先精确匹配「去标点原文」（如「够了」不能因词尾“了”被剥掉而落空）
-    if (lower.includes(base)) return true
-    if (lower.includes(n)) return true
-    // 口语重复强调：够了够了 / 结束结束（分别对去标点原文与剥语气词后文本比较）
-    return lower.some(
-      (w) =>
-        base === w.repeat(2) || base === w.repeat(3) || n === w.repeat(2) || n === w.repeat(3),
+    let n = text.trim().replace(/[。．.！？!?，,、；;~～]+$/g, '').toLowerCase()
+    // 每剥一步都查一次词表（含重复词），防止「够了呀」剥掉词尾“了”后失配
+    for (let i = 0; i < 5; i++) {
+      if (lower.includes(n)) return true
+      if (lower.some((w) => n === w.repeat(2) || n === w.repeat(3))) return true
+      // 口语省略词尾「了」：够啦 → 够 ≈ 够了
+      if (lower.some((w) => w.endsWith('了') && n === w.slice(0, -1))) return true
+      if (TRAILING_PARTICLES.test(n)) n = n.slice(0, -1)
+      else if (n.endsWith('一下')) n = n.slice(0, -2)
+      else break
+    }
+    return (
+      lower.includes(n) ||
+      lower.some((w) => n === w.repeat(2) || n === w.repeat(3)) ||
+      lower.some((w) => w.endsWith('了') && n === w.slice(0, -1))
     )
   }
   function hitAdvance(text: string): boolean {
@@ -359,7 +365,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
   function countBacklog(grill: string): number {
     const rest = grill.split('## Unresolved Backlog')[1] ?? ''
     const section = rest.split(/^##\s/m)[0] ?? ''
-    return section.split('\n').map((l) => l.trim()).filter((l) => l.length > 1 && /^-(\s|\[)/.test(l) && !/^- \[x\]/i.test(l)).length
+    return section.split('\n').map((l) => l.trim()).filter((l) => l.length > 1 && l.startsWith('-') && !/^- ?(\[[xX✓]\]|[✓✔])/.test(l)).length
   }
 
   async function openCompile(slug: string, exec?: ExecCtx): Promise<StepResult> {
@@ -510,9 +516,9 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     let checkDone = 0
     let checkTodo = 0
     for (const line of lines) {
-      const m = line.match(/^\s*[-*]\s+([^\s:：]+)\s*[:：]?\s*(doing|done|failed|blocked|todo)(?=[\s，,、；;]|$)\s*(.*)$/)
+      const m = line.match(/^\s*[-*]\s+([^\s:：]+)\s*[:：]?\s*(doing|done|failed|blocked|todo)(?=[\s，,、；;。．.!？?：:～~]|$)\s*(.*)$/)
       if (m) {
-        latest[m[1]] = { status: m[2], reason: m[3].trim().replace(/^[:：]\s*/, '') }
+        latest[m[1]] = { status: m[2], reason: m[3].trim().replace(/^[\s，,、；;:：]+/, '') }
         continue
       }
       if (/^\s*[-*]\s*\[x\]/i.test(line)) checkDone += 1
@@ -553,7 +559,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
     const m = record.trim().match(/^([^\s:：]+)\s*[:：]?\s*(doing|done|failed|blocked|todo)\b\s*(.*)$/)
     if (!m) return `无法解析记录「${record}」，格式应为「任务ID 状态 [原因]」，状态 ∈ doing/done/failed/blocked/todo。`
     const [, id, status] = m
-    const reason = m[3].trim().replace(/^[:：]\s*/, '')
+    const reason = m[3].trim().replace(/^[\s，,、；;:：]+/, '')
     const cur = (await readFile(planPath(slug), exec)) || planHead(slug, config.grillDir)
     const anchor = '## 执行状态'
     const line = `- ${id}: ${status}${reason.trim() ? ' ' + reason.trim() : ''}`
@@ -670,7 +676,7 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
         if (legacyHasGrill || legacyHasPlan) {
           const ph: Phase = legacyHasPlan ? 'execute' : legacyHasGrill ? 'compile' : 'grill'
           return {
-            text: `检测到旧版默认计划「${config.defaultSlug}」的状态文件（${config.grillDir}/${config.defaultSlug}.md 等）——可能是旧版中文项目名落盘的。想续跑旧状态请显式传 slug=${config.defaultSlug} 并用 action=continue；想新建本计划「${slug}」请重新 action=start（或换一个 ASCII 项目名）。`,
+            text: `检测到旧版默认计划「${config.defaultSlug}」的状态文件（${config.grillDir}/${config.defaultSlug}.md 等）——可能是旧版中文项目名落盘的。想续跑旧状态请显式传 slug=${config.defaultSlug} 并用 action=continue；想新建本计划「${slug}」请用 action=start 并显式带 phase=grill（否则会重复此提示）。`,
             nextAction: 'continue', phase: ph, slug,
           }
         }

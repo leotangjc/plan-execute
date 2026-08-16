@@ -359,14 +359,15 @@ describe('v2.1 防碰撞与语义', () => {
     const execute = await executeOf(getRegistered())
 
     await execute({ action: 'start' })
-    files.set('.grill/demo.md', files.get('.grill/demo.md')! + '- 平台选型未定\n')
+    // 无空格行也计入未决（防守门绕过）
+    files.set('.grill/demo.md', files.get('.grill/demo.md')! + '-待确认项\n')
 
     const blocked = await execute({ action: 'answer', answer: '结束' })
     expect(blocked.phase).toBe('compile')
     expect(blocked.text).toContain('暂缓')
     expect(files.has('.plan/demo.md')).toBe(false)
 
-    files.set('.grill/demo.md', files.get('.grill/demo.md')!.replace('- 平台选型未定\n', '- [x] 平台选型未定（已处理）\n'))
+    files.set('.grill/demo.md', files.get('.grill/demo.md')!.replace('-待确认项\n', '- [x] 待确认项（已处理）\n'))
     const ok = await execute({ action: 'answer', answer: '结束' })
     expect(ok.text).toContain('编译计划')
     expect(files.has('.plan/demo.md')).toBe(true)
