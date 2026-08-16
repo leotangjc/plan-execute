@@ -54,6 +54,8 @@ compile 第二层确认 → 工具切 execute 并直接返回 execute 开场；e
 | record | 任务状态「任务ID 状态 [原因]」 | execute |
 | deviation | 记录一条与计划的偏差 | execute |
 
+插件配置（组合行 `config`）：`autoTrigger: boolean`（缺省 true）——true = 需求模糊/多步骤/项目级新任务默认进入流程；false = 仅触发词进入。
+
 ## 6. skill `plan-workflow` 内容大纲
 
 1. Role（编排者 + 主执行者，用户是唯一决策者）
