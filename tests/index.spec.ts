@@ -319,3 +319,93 @@ describe('slug 清洗', () => {
     expect(Array.from(files.keys()).some((k) => k.includes('..'))).toBe(false)
   })
 })
+
+describe('v2.1 防碰撞与语义', () => {
+  it('纯中文 slug 转 plan-短哈希且不同名不冲突；空/缺省回默认', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG) // defaultSlug: 'demo'
+    const execute = await executeOf(getRegistered())
+
+    const a = await execute({ action: 'start', slug: '记账项目' })
+    expect(a.slug).toMatch(/^plan-[0-9a-f]{6}$/)
+
+    const b = await execute({ action: 'start', slug: '任务安排' })
+    expect(b.slug).not.toBe(a.slug)
+
+    const d = await execute({ action: 'start' })
+    expect(d.slug).toBe('demo')
+  })
+
+  it('grill 中「暂停/停」停留本阶段，「结束」才推进', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start' })
+    const paused = await execute({ action: 'answer', answer: '暂停一下' })
+    expect(paused.phase).toBe('grill')
+    expect(paused.text).toContain('暂停')
+
+    const end = await execute({ action: 'answer', answer: '结束' })
+    expect(end.phase).toBe('compile')
+  })
+
+  it('Unresolved Backlog 非空时「结束」暂缓编译；清空后可进', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start' })
+    files.set('.grill/demo.md', files.get('.grill/demo.md')! + '- 平台选型未定\n')
+
+    const blocked = await execute({ action: 'answer', answer: '结束' })
+    expect(blocked.phase).toBe('compile')
+    expect(blocked.text).toContain('暂缓')
+    expect(files.has('.plan/demo.md')).toBe(false)
+
+    files.set('.grill/demo.md', files.get('.grill/demo.md')!.replace('- 平台选型未定\n', ''))
+    const ok = await execute({ action: 'answer', answer: '结束' })
+    expect(ok.text).toContain('编译计划')
+    expect(files.has('.plan/demo.md')).toBe(true)
+  })
+
+  it('report 统计无冒号手写行，且偏差节不混入执行状态', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    const plan = [
+      '# 执行计划: demo',
+      '## 任务列表',
+      '## 执行状态',
+      '- T1 done',
+      '- T2: done',
+      '## 偏差记录',
+      '- x: done',
+    ].join('\n')
+    files.set('.plan/demo.md', plan)
+    files.set('.plan/demo.meta.json', JSON.stringify({ phase: 'execute', slug: 'demo' }))
+
+    const r = await execute({ action: 'report' })
+    expect(r.text).toContain('done: 2')
+  })
+
+  it('Q 编号只数带数字的 Q 行，防「- Q：转述」污染', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start' })
+    files.set(
+      '.grill/demo.md',
+      files.get('.grill/demo.md')!.replace('## Constraints & Risks', '- Q：转述问题\n## Constraints & Risks'),
+    )
+    const r = await execute({ action: 'answer', question: '第一个问题', answer: '答复A' })
+    expect(files.get('.grill/demo.md')).toContain('- Q1：第一个问题')
+  })
+})

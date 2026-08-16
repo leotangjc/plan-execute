@@ -21,8 +21,9 @@
 - 喂数据口子：question · section+content · record · deviation · answer · phase · slug
 - 子状态（存 `.plan/<slug>.meta.json`）：phase / compileLayer / updatedAt
 
-阶段衔接（自动）：grill 用户说「结束」→ 工具切 compile 并直接返回 compile 开场；
-compile 第二层确认 → 工具切 execute 并直接返回 execute 开场；execute「结束」→ done（终态）。
+阶段衔接（自动）：grill 用户说「结束/够了/结束拷问」→ 工具切 compile（若 Unresolved Backlog 非空先暂缓一次，清空后才放行）并返回 compile 开场；
+compile 第二层确认 → 工具切 execute；execute「结束」→ done（终态）。
+说「暂停/停」停留在当前阶段（不推进），未决项写进 .grill 的 Unresolved Backlog。
 `continue` 仅用于断点续跑。
 
 报告：唯一入口 `action=report`（execute 阶段输出里程碑报告，其它阶段输出阶段指针）。
@@ -47,7 +48,7 @@ compile 第二层确认 → 工具切 execute 并直接返回 execute 开场；e
 | --- | --- | --- |
 | action | start/answer/continue/report/stop | 全程 |
 | phase | 指定阶段（grill/compile/execute） | 全程 |
-| slug | 项目标识（清洗为 [A-Za-z0-9_-]，缺省 plan） | 全程 |
+| slug | 项目标识（清洗为 [A-Za-z0-9_-]，缺省 plan；纯非 ASCII 名 → plan-短哈希，旧版落盘的默认 plan 状态可用显式 slug=plan 续跑） | 全程 |
 | answer | 用户对上一题的最终答复 | grill/compile/execute |
 | question | 主 agent 提的问题（本次 answer 对应） | grill |
 | section + content | 写计划六字段 | compile/execute |
@@ -77,4 +78,7 @@ compile 第二层确认 → 工具切 execute 并直接返回 execute 开场；e
 - 插件不做读代码/生成计划/验收判断/执行纪律（归 skill）；
 - 不内置任何题目（无固定题库，grill 必须由主 agent 用 question 喂题）；
 - 不做任务级崩溃恢复、不做撤销/回滚（建议 workspace 放 git）；
-- 不改用户本地三个原 skill 文件。
+- 不改用户本地三个原 skill 文件；
+- 不新增「配置旋钮」：maxGrillQuestions / stopWords 可配置 / reportStyle 均为 YAGNI（对抗审查证伪），停止词与流程语义用内置规则修；
+- 不保留中文 slug（保 ASCII + 哈希兜底：中文项目名 → plan-短哈希；可读性靠 skill 建议 ASCII 命名）；
+- 非 execute 阶段 report 只给阶段指针，不输出决策摘要（避免每轮一屏噪音）。
