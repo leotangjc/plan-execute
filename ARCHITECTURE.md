@@ -14,6 +14,8 @@
 
 铁律：工具只接收「最终确认的内容」；所有「改/拒绝/重问/抓矛盾」都在 skill↔用户 之间完成，绝不进工具。
 
+skill 正文独立于 `src/skill-content.ts`（避免与引擎状态机耦合）；正文内的停止词（结束/够了/结束拷问/stop/done、暂停/停/先暂停/先停）须与引擎 `ADVANCE_WORDS`/`PAUSE_WORDS` 保持同步，改词表时两处一起改。
+
 ## 3. 工具（状态机）
 
 - 阶段：grill → compile → execute → done（`start` 续跑；`done`/无记录才重开）

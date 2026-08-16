@@ -3,7 +3,7 @@
  *
  * 一个包两个实体：
  * - 工具 `plan_execute`：状态机 + 文件落盘 + 里程碑报告（本文件）
- * - skill `plan-workflow`：编排大脑（apply 内注册，正文见 SKILL_CONTENT）
+ * - skill `plan-workflow`：编排大脑（apply 内注册，正文见 src/skill-content.ts）
  *
  * 状态落在调用会话工作目录的 `.grill/` 与 `.plan/` 文件里，可断点续跑。
  * 只通过文档化扩展接缝注册：`ctx.tools`（工具）+ `ctx.get('fs')`（落盘）+

@@ -110,6 +110,10 @@ describe('dsh-plan-execute 插件契约', () => {
     expect(skill!.source).toBe('bundled')
     expect(skill!.content).toContain('拷问决策')
     expect(skill!.content).toContain('plan_execute')
+    // 抽离自 src/skill-content.ts 后仍须保留：默认触发文案 + 执行状态节勿手改
+    expect(skill!.content).toContain('默认进入本流程')
+    expect(skill!.content).toContain('执行状态」节只由 plan_execute 用 record 参数写')
+    expect(skill!.content).toContain('stop / done')
   })
 
   it('无 skills 服务时工具仍可注册', () => {
