@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { apply, inject, name } from '../src/index.ts'
+import { ACTION_RULES, NEXT_PHASE, PHASES } from '../src/state-machine.ts'
 import { buildSkillContent } from '../src/skill-content.ts'
 import { VERSION } from '../src/version.ts'
 import type { ExecCtx, FsService, FsTarget, PlanExecuteConfig } from '../src/index.ts'
@@ -617,5 +618,48 @@ describe('防御设计（批次1+2）', () => {
   it('skill 正文快照（防无意识文案漂移）', () => {
     expect(buildSkillContent(true)).toMatchSnapshot('autoTrigger-true')
     expect(buildSkillContent(false)).toMatchSnapshot('autoTrigger-false')
+  })
+})
+
+describe('显式状态机表', () => {
+  it('阶段线性推进：grill→compile→execute→done，且可达', () => {
+    expect(NEXT_PHASE.grill).toBe('compile')
+    expect(NEXT_PHASE.compile).toBe('execute')
+    expect(NEXT_PHASE.execute).toBe('done')
+    expect(PHASES).toEqual(['grill', 'compile', 'execute', 'done'])
+  })
+
+  it('矩阵完整性：每阶段都定义了五列动作', () => {
+    for (const ph of PHASES) {
+      for (const a of ['start', 'answer', 'continue', 'report', 'stop']) {
+        expect(ACTION_RULES[ph]).toHaveProperty(a)
+      }
+    }
+  })
+
+  it('运行时：grill 阶段 continue 被明确拦截（不再是「未知动作」）', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await execute({ action: 'start' })
+    const r = await execute({ action: 'continue' })
+    expect(r.text).toContain('已在「拷问决策」阶段')
+    expect(r.text).not.toContain('未知动作')
+  })
+
+  it('运行时：done 阶段 answer/continue 给明确提示', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    // 直接构造 done 元数据
+    const mem = memFs()
+    mem.files.set('.plan/demo.meta.json', JSON.stringify({ phase: 'done', slug: 'demo', schema: 2 }))
+    const { ctx: c2, getRegistered: g2 } = makeCtx(mem.service)
+    apply(c2, CONFIG)
+    const ex = await executeOf(g2())
+    const r = await ex({ action: 'answer', answer: 'x' })
+    expect(r.text).toContain('流程已完成')
   })
 })

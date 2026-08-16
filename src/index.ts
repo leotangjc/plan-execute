@@ -14,6 +14,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import { PHASES, blockedMessage } from './state-machine.js'
 import { buildSkillContent } from './skill-content.js'
 import { VERSION } from './version.js'
 
@@ -84,7 +85,6 @@ export interface ExecCtx {
 
 export type Phase = 'grill' | 'compile' | 'execute' | 'done'
 export type NextAction = 'start' | 'answer' | 'continue' | 'report' | 'stop'
-
 export interface StepResult {
   text: string
   nextAction: NextAction
@@ -124,7 +124,6 @@ export interface PlanToolDefinition {
   execute(args: Record<string, unknown>, exec: ExecCtx): Promise<StepResult>
 }
 
-const PHASES: readonly Phase[] = ['grill', 'compile', 'execute', 'done']
 const ADVANCE_WORDS = ['结束', '够了', '结束拷问', 'stop', 'done']
 const PAUSE_WORDS = ['暂停', '停', '先暂停', '先停']
 const TRAILING_PARTICLES = /[了吧啊呀哈呢哦嘛啦咯喽呗哟哇]+$/
@@ -656,13 +655,17 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
       phaseNow = await currentPhase(slug, exec)
     }
 
+    // 显式状态机表：查合法性矩阵，被拦截的组合给明确提示（取代散落的「未知动作。」）
+    const blocked = blockedMessage(phaseNow, action as NextAction)
+    if (blocked !== undefined) {
+      return { text: blocked, nextAction: 'continue', phase: phaseNow, slug }
+    }
     if (phaseNow === 'grill') return await grillAction(action, slug, answer, question, exec)
     if (phaseNow === 'compile') return await compileAction(action, slug, answer, exec)
     if (phaseNow === 'execute') return await executeAction(action, slug, answer, record, deviation, exec)
     if (phaseNow === 'done') return { text: '流程已完成。如需重跑：换一个 slug 新建，或删除 .grill/.plan 文件后 action=start。', nextAction: 'start', phase: 'done', slug }
     return { text: '无法判定阶段。', nextAction: 'start', phase: 'grill', slug }
   }
-
   // 审计日志：每次调用 append 一行到 .plan/<slug>.log（尽力而为，写失败不影响主流程）
   async function appendLog(action: string, result: StepResult, exec?: ExecCtx): Promise<void> {
     const line = `${new Date().toISOString()} | ${action} | ${result.slug} | →${result.phase} | ${result.text.slice(0, 60).replace(/\n/g, ' ')}\n`
