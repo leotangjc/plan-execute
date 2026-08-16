@@ -1,0 +1,6 @@
+# dsh-plan-execute bundle patch：把插件行插入 profile 组合。
+# 由 `dsh plugin add` 安装后自动应用；本行只注册模型工具，不发布服务，
+# 因此无需 group/isolate realm。
+- insert:
+    - id: tool-plan-execute
+      name: 'dsh-plan-execute'
