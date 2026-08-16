@@ -38,8 +38,9 @@ compile 第二层确认 → 工具切 execute；execute「结束」→ done（�
 .plan/<slug>.md         六字段（任务列表/依赖图/验收标准/风险与假设/未决项映射/里程碑）
                         + 确认记录 + 执行状态 + 偏差记录
                         六字段用 section+content 写；确认记录/执行状态/偏差记录由工具写
-.plan/<slug>.meta.json  阶段指针 + 任务状态快照（机器读；tasks 由 record 写，report 优先读它，
-                        缺失时回退解析 md 执行状态节——老数据零迁移）
+.plan/<slug>.meta.json  阶段指针 + 任务/偏差结构化快照（机器读，report 唯一事实源；
+                        tasks/deviations 由 record/deviation 写；md 执行状态/偏差记录节仅展示；
+                        老计划无快照时报告显示暂无状态）
 .plan/.current          活动 slug 指针（机器读）：非 start 调用漏传 slug 时兜底用最近一次的计划，
                         仅当该 slug 确有状态文件时生效，否则回默认（防记错计划）
 ```

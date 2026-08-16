@@ -110,9 +110,9 @@ describe('dsh-plan-execute 插件契约', () => {
     expect(skill!.source).toBe('bundled')
     expect(skill!.content).toContain('拷问决策')
     expect(skill!.content).toContain('plan_execute')
-    // 抽离自 src/skill-content.ts 后仍须保留：默认触发文案 + 执行状态节勿手改
+    // 抽离自 src/skill-content.ts 后仍须保留：默认触发文案 + 执行状态/偏差展示-only 契约
     expect(skill!.content).toContain('默认进入本流程')
-    expect(skill!.content).toContain('执行状态」节只由 plan_execute 用 record 参数写')
+    expect(skill!.content).toContain('统计只来自 .plan/<slug>.meta.json 快照')
     expect(skill!.content).toContain('stop / done')
   })
 
@@ -475,26 +475,47 @@ describe('v2.1 防碰撞与语义', () => {
     expect(end.phase).toBe('compile')
   })
 
-  it('report 统计无冒号手写行，且偏差节不混入执行状态', async () => {
+  it('完整版契约：report 只认 meta 快照，md 手写状态/偏差行一律不计入', async () => {
     const { files, service } = memFs()
     const { ctx, getRegistered } = makeCtx(service)
     apply(ctx, CONFIG)
     const execute = await executeOf(getRegistered())
 
+    // md 里有手写状态行 + 偏差节伪行，但 meta 只有 tasks 快照
     const plan = [
       '# 执行计划: demo',
       '## 任务列表',
       '## 执行状态',
       '- T1 done',
-      '- T2: done',
+      '- X done',
       '## 偏差记录',
-      '- x: done',
+      '- 手写偏差：不算',
     ].join('\n')
     files.set('.plan/demo.md', plan)
+    files.set(
+      '.plan/demo.meta.json',
+      JSON.stringify({ phase: 'execute', slug: 'demo', tasks: { T1: { status: 'done' } }, deviations: ['真实偏差'] }),
+    )
+
+    const r = await execute({ action: 'report' })
+    expect(r.text).toContain('done: 1') // 只计 meta.tasks，md 里的 X done 不计
+    expect(r.text).not.toContain('X')
+    expect(r.text).toContain('deviations: 1') // 只计 meta.deviations，md 手写偏差不计
+    expect(r.text).toContain('真实偏差')
+    expect(r.text).not.toContain('手写偏差')
+  })
+
+  it('老计划（meta 无快照）report 显示暂无状态而非解析 md', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+
+    files.set('.plan/demo.md', ['# 执行计划: demo', '## 执行状态', '- T1 done'].join('\n'))
     files.set('.plan/demo.meta.json', JSON.stringify({ phase: 'execute', slug: 'demo' }))
 
     const r = await execute({ action: 'report' })
-    expect(r.text).toContain('done: 2')
+    expect(r.text).toContain('尚无执行状态记录')
   })
 
   it('Q 编号只数带数字的 Q 行，防「- Q：转述」污染', async () => {
