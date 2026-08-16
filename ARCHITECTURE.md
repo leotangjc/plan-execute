@@ -21,12 +21,14 @@ skill 正文独立于 `src/skill-content.ts`（避免与引擎状态机耦合）
 - 阶段：grill → compile → execute → done（`start` 续跑；`done`/无记录才重开）
 - 动作：start / answer / continue / report / stop
 - 喂数据口子：question · section+content · record · deviation · answer · phase · slug
-- 子状态（存 `.plan/<slug>.meta.json`）：phase / compileLayer / updatedAt
+- 子状态（存 `.plan/<slug>.meta.json`）：phase / compileLayer / updatedAt / schema / tasks / deviations
+- `stop` 语义（v0.1.0 起与状态机表一致）：grill/compile 阶段 = 停留当前阶段（不置 done、不锁死）；execute 阶段 = 安全收尾置 done（快照保留）；done 阶段 = 提示无需停止。`stop` 不再无条件置 done。
 
 阶段衔接（自动）：grill 用户说「结束/够了/结束拷问」→ 工具切 compile（若 Unresolved Backlog 非空先暂缓一次，清空后才放行）并返回 compile 开场；
 compile 第二层确认 → 工具切 execute；execute「结束」→ done（终态）。
 说「暂停/停」停留在当前阶段（不推进），未决项写进 .grill 的 Unresolved Backlog。
 `continue` 仅用于断点续跑。
+进入 execute 有守门：仅当 meta 阶段为 execute（续跑）或 compile 两层确认完成（compileLayer=detail）才放行——显式 phase=execute 无法绕过未确认直达执行。
 
 报告：唯一入口 `action=report`（execute 阶段输出里程碑报告，其它阶段输出阶段指针）。
 
@@ -93,8 +95,10 @@ compile 第二层确认 → 工具切 execute；execute「结束」→ done（�
 ## 9. 防御设计（批次1+2）
 
 - 版本指纹：`src/version.ts` 导出 VERSION，工具描述与报告首行带 `v<版本>`；**改 package.json 版本号时必须同步 src/version.ts**（测试断言两者一致）。
-- 参数组合前置校验：section↔content 成对、record/section/deviation 互斥，非法组合立即报错不落盘。
+- writeMeta 合并语义（V-01 修复）：所有阶段转换/收尾/重开写 meta 时保留旧 tasks/deviations 快照（内部先读旧值再合并），断点续跑不再清空 report 事实源；损坏 meta（JSON 解析失败）先备份 `.corrupt-<时间戳>` 再写入，不静默覆盖。
+- 停止词判定（V-03 修复）：grill 阶段带 question 的回答一律按内容 Q/A 记录，不触发「结束/够了/暂停」等控制词——控制词仅对不带 question 的 answer 生效，避免「预算够了吗→够了」被误判推进。
+- 参数组合前置校验：section↔content 成对、record/section/deviation 互斥，非法组合立即报错不落盘；计划字段 section 仅在 compile/execute 阶段可写。
 - 状态摘要：record/deviation 返回附当前计数，供模型自纠。
 - schema 守卫：writeMeta 一律写 `schema: 2`；比当前 schema 旧的元数据在报告时给出明确提示（不静默走老逻辑）。
-- 审计日志：每次调用 append 到 `.plan/<slug>.log`。
+- 审计日志：每次调用 append 到 `.plan/<slug>.log`（保留最近 500 行）。
 - skill 正文快照测试：`buildSkillContent(true/false)` 有 snapshot，改文案需显式 `-u` 更新。

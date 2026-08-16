@@ -663,3 +663,170 @@ describe('显式状态机表', () => {
     expect(r.text).toContain('流程已完成')
   })
 })
+
+describe('缺陷修复回归（heavy-reasoning 审查 v0.1.0）', () => {
+  async function intoExecuteLocal(execute: (args: Record<string, unknown>) => Promise<{ phase: string; text: string }>) {
+    await execute({ action: 'start' })
+    await execute({ action: 'answer', answer: '结束' })
+    await execute({ action: 'answer', answer: '结构 OK' })
+    await execute({ action: 'answer', answer: '细节 OK' })
+  }
+
+  it('V-01：record 后 continue/结束/stop，meta 快照保留，report 计数不丢', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await intoExecuteLocal(execute as never)
+
+    await execute({ action: 'answer', record: 'T1 done' })
+    // continue 续跑：快照必须保留
+    const c = await execute({ action: 'continue' })
+    expect(c.phase).toBe('execute')
+    const r1 = await execute({ action: 'report' })
+    expect(r1.text).toContain('done: 1')
+    // 结束收尾：快照仍保留
+    await execute({ action: 'answer', answer: '结束' })
+    const meta = JSON.parse(files.get('.plan/demo.meta.json')!)
+    expect(meta.tasks).toMatchObject({ T1: { status: 'done' } })
+    expect(meta.schema).toBe(2)
+  })
+
+  it('V-01b：execute 阶段 stop 置 done 但快照保留', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await intoExecuteLocal(execute as never)
+    await execute({ action: 'answer', record: 'T1 done' })
+
+    const s = await execute({ action: 'stop' })
+    expect(s.phase).toBe('done')
+    const meta = JSON.parse(files.get('.plan/demo.meta.json')!)
+    expect(meta.tasks).toMatchObject({ T1: { status: 'done' } })
+  })
+
+  it('V-02：损坏 meta 不静默覆盖，生成 .corrupt 备份', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await intoExecuteLocal(execute as never)
+    await execute({ action: 'answer', record: 'T1 done' })
+
+    // 手改坏 meta
+    files.set('.plan/demo.meta.json', '{ broken json !!!')
+    const r = await execute({ action: 'answer', record: 'T2 doing' })
+    expect(r.text).toContain('已记录')
+    const corrupt = Array.from(files.keys()).filter((k) => k.includes('.corrupt-'))
+    expect(corrupt.length).toBe(1)
+    expect(files.get(corrupt[0])).toBe('{ broken json !!!')
+    // 新 meta 正常写入（损坏被备份而非覆盖）
+    const meta = JSON.parse(files.get('.plan/demo.meta.json')!)
+    expect(meta.tasks.T2.status).toBe('doing')
+  })
+
+  it('V-03：带 question 的「够了」按内容记录不推进；不带 question 的「结束」仍推进', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await execute({ action: 'start' })
+
+    const r = await execute({ action: 'answer', question: '预算够了吗？', answer: '够了' })
+    expect(r.phase).toBe('grill')
+    expect(r.text).toContain('已记录')
+    expect(files.get('.grill/demo.md')).toContain('预算够了吗')
+
+    const r2 = await execute({ action: 'answer', answer: '结束' })
+    expect(r2.phase).toBe('compile')
+  })
+
+  it('V-04：grill 阶段 stop 停留不锁死；execute 阶段 stop 收尾保留快照', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await execute({ action: 'start' })
+
+    const s = await execute({ action: 'stop' })
+    expect(s.phase).toBe('grill')
+    const q = await execute({ action: 'answer', question: 'Q1?', answer: 'A1' })
+    expect(q.phase).toBe('grill') // stop 后仍可继续
+  })
+
+  it('V-05：grill 阶段写 section 被拒；未确认 start&phase=execute 被拦；正常确认后仍可进 execute', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await execute({ action: 'start' })
+
+    const r = await execute({ action: 'answer', section: '任务列表', content: '- T1' })
+    expect(r.text).toContain('只能在编译/执行阶段')
+
+    const r2 = await execute({ action: 'start', phase: 'execute' })
+    // 无 .plan 文件 → 「未找到」；有 .plan 但未确认 → 「两层确认」：两者都算拦截（不得直达执行）
+    expect(r2.text).toMatch(/未找到|两层确认/)
+
+    await execute({ action: 'answer', answer: '结束' })
+    await execute({ action: 'answer', answer: '结构 OK' })
+    await execute({ action: 'answer', answer: '细节 OK' })
+    const ok = await execute({ action: 'continue' })
+    expect(ok.phase).toBe('execute')
+  })
+
+  it('V-06：resolve 失败时返回可见错误而非静默成功', async () => {
+    const broken: FsService = {
+      async resolve() { return undefined },
+      async stat() { return undefined },
+      async readText() { throw new Error('ENOENT') },
+      async writeText() { throw new Error('never called') },
+    }
+    const { ctx, getRegistered } = makeCtx(broken)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    const r = await execute({ action: 'start' })
+    expect(r.text).toContain('写入失败')
+  })
+
+  it('V-07：record 保留名（__proto__）与超长 id 被拒', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await intoExecuteLocal(execute as never)
+
+    const r = await execute({ action: 'answer', record: '__proto__ done' })
+    expect(r.text).toContain('不合法')
+    const long = await execute({ action: 'answer', record: `${'x'.repeat(40)} done` })
+    expect(long.text).toContain('不合法')
+  })
+
+  it('V-08：非 start 漏传 slug 兜底时披露所用 slug；.current 穿越字符被清洗', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await execute({ action: 'start', slug: 'abc' })
+
+    const r = await execute({ action: 'answer', question: 'Q1?', answer: 'A' })
+    expect(r.text).toContain('沿用最近计划 abc')
+
+    // 手改 .current 为穿越字符：不应产生 .. 路径写入
+    files.set('.plan/.current', '../../evil')
+    const r2 = await execute({ action: 'answer', question: 'Q2?', answer: 'B' })
+    expect(r2.slug).not.toContain('..')
+    expect(Array.from(files.keys()).some((k) => k.includes('..'))).toBe(false)
+  })
+
+  it('P9：混合停止词「够了！stop」触发推进', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    const execute = await executeOf(getRegistered())
+    await execute({ action: 'start', slug: 'mix' })
+    const r = await execute({ action: 'answer', answer: '够了！stop' })
+    expect(r.phase).toBe('compile')
+  })
+})
