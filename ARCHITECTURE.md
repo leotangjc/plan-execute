@@ -1,11 +1,12 @@
-# dsh-plan-execute 结构设计（arch-final / 面向普通用户版）
+# dsh-plan-execute 结构设计（双模式版，main 当前形态）
 
-> 本文档对应 `arch-final` 分支。设计经 heavy-reasoning 协议（3 生成 + 批判 + 破拆 + 父代理抽查）收敛，并基于真实 DSH fs 源码实证。
+> 单包双引擎：light（简化，缺省）+ heavy（完整防御），由 config.mode 分发（见 §1-§6 light 为主、§7 起含双引擎说明）。设计经 heavy-reasoning 协议（3 生成 + 批判 + 破拆 + 父代理抽查）收敛，并基于真实 DSH fs 源码实证。
 
 ## 1. 一句话
 
-一个包 = 一个「闸门与统计」工具 `plan_execute` + 一个「大脑」skill `plan-workflow`。
-任务状态 = 项目 md 的勾选行；引擎只读 md、只写 meta，绝不覆盖已有计划。
+一个包 = 一个「闸门与统计」工具 `plan_execute` + 一个「大脑」skill `plan-workflow`，按 `config.mode` 选引擎。
+light 模式：任务状态 = 项目 md 的勾选行；引擎只读 md、只写 meta，绝不覆盖已有计划。
+heavy 模式：完整状态机（grill→compile→execute→done）+ 两层确认 + 六字段 + 审计 + 活动指针。
 
 ## 2. 职责边界（谁写什么——核心）
 
@@ -75,9 +76,10 @@ start（compile）→ skill 写 md 任务列表 → confirm（校验 ≥1 任务
 - withLock 进程内（跨进程无效）→ 引擎写 meta 用版本守卫而非锁
 - **模型工具层不暴露 createIfAbsent/replaceIfVersion 参数**（writeText 第 3 参来自 waterfall intent）→ 引擎是唯一能拿到 fs 级硬原子守卫的路径（「引擎值得存在」的实证依据）
 
-## 8. 测试（20 个）
+## 8. 测试（71 个）
 
-memFs 镜像真实 fs 语义（createIfAbsent/replaceIfVersion/stat 版本号）。覆盖：契约、防覆盖（md/meta 双检查）、confirm 守门、report 现算、md 手改=用户决定、备注行不算任务、deviation 类型前缀、收尾闸门、stop 置 done、continue 回退、版本守卫链、skill 快照。
+- **light 套件**（20 个）：memFs 镜像真实 fs 语义（createIfAbsent/replaceIfVersion/stat 版本号）。覆盖：契约、防覆盖（md/meta 双检查）、confirm 守门、report 现算、md 手改=用户决定、备注行不算任务、deviation 类型前缀、收尾闸门、stop 置 done、continue 回退、版本守卫链、skill 快照。
+- **heavy 套件**（51 个）：完整状态机、两层确认、六字段、backlog 守门、停止词变体、防御设计、显式状态机表。
 
 ## 9. 明确不做
 
