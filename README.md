@@ -107,6 +107,29 @@ A：不会。它有一套硬规矩：**逐题等你回答、绝不替你拍板**
 **Q：需要装 Node 吗？**
 A：不用。装好的包里已经带成品，只有你要改代码重新构建时才需要 Node。
 
+## 两种工作模式（轻重并存）
+
+同一个插件内置两套引擎，用组合行 `config.mode` 切换（改完重启 DSH 生效）：
+
+| | **light（缺省）** | **heavy** |
+|---|---|---|
+| 适合 | 普通用户、个人项目 | 重度项目管理、要审计 |
+| 状态真相 | `<slug>.md` 勾选行（`- [x] T1: 标题`） | meta 快照 + md 展示（完整状态机） |
+| 流程 | start → 写任务列表 → confirm → 执行 → stop | grill 拷问 → compile 两层确认 → execute → done |
+| 文件 | `proj.md` + `.plan/proj.meta.json` | `.grill/` + `.plan/`（md + meta + 指针 + 日志） |
+| 动作 | start/confirm/deviation/report/stop/continue | start/answer/continue/report/stop |
+
+```yaml
+# ~/.dsh/.agent-presets/<你的preset>/agent.cordis.yml 里的插件行
+- id: tool-plan-execute
+  name: './plan-execute/lib/index.js'
+  config:
+    mode: heavy        # light（缺省）或 heavy
+    autoTrigger: true
+```
+
+> 两种模式工具名/触发词相同（`plan_execute` / 「计划实施」），只是行为深浅不同。**切模式后旧计划互不可见**（文件契约不同），建议切换时换 slug 或目录。
+
 ## 已知限制
 
 - 它负责「闸门与统计」，**不负责替你想**——问什么、任务怎么写、验收怎么判，由它驱动的 agent 来做（但都以你的决定为准）；

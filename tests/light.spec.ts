@@ -164,8 +164,8 @@ describe('dsh-plan-execute arch-final 契约', () => {
   })
 
   it('skill 正文快照（防无意识文案漂移）', () => {
-    expect(buildSkillContent(true)).toMatchSnapshot('autoTrigger-true')
-    expect(buildSkillContent(false)).toMatchSnapshot('autoTrigger-false')
+    expect(buildSkillContent('light', true)).toMatchSnapshot('autoTrigger-true')
+    expect(buildSkillContent('light', false)).toMatchSnapshot('autoTrigger-false')
   })
 })
 
