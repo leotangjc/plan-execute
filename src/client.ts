@@ -16,20 +16,20 @@
  */
 
 function apply(ctx) {
+  // 用 ctx.get 读取服务：不触发 cordis 的 inject 检查，服务不存在时安全返回 undefined。
+  // （此前用 ctx.slots / ctx.settingsScope 属性访问，在未注入时 cordis 会抛
+  //   "cannot get property 'slots' without inject" 导致整个 loader 失败。）
+  const getService = (name) => (ctx && typeof ctx.get === 'function') ? ctx.get(name) : undefined
+
   // 诊断：记录 apply 执行路径（写到 window 供浏览器侧读取）
-  const diag = { called: true, hasGet: typeof ctx.get === 'function', slotsViaGet: undefined, slotsViaProp: undefined, settingsScopeViaGet: undefined, settingsScopeViaProp: undefined, error: undefined }
-  try {
-    diag.slotsViaGet = typeof ctx.get === 'function' ? typeof ctx.get('slots') : 'no-get'
-    diag.slotsViaProp = typeof ctx.slots
-    diag.settingsScopeViaGet = typeof ctx.get === 'function' ? typeof ctx.get('settingsScope') : 'no-get'
-    diag.settingsScopeViaProp = typeof ctx.settingsScope
-  } catch (e) { diag.error = String(e) }
+  const diag = { called: true, hasGet: typeof ctx.get === 'function', slotsViaGet: typeof getService('slots'), settingsScopeViaGet: typeof getService('settingsScope'), error: undefined }
   if (typeof window !== 'undefined') window.__PLAN_DIAG__ = diag
 
-  // 与 dsh-notification 一致：用 ctx.slots 属性（declared-service access）
-  const slots = ctx.slots || (ctx.get && ctx.get('slots'))
+  // 优雅降级：rc.6/rc.7 的 web roster 不提供 slots 服务，设置卡片无法注册；
+  // 跳过即可，plan_execute 核心工具在 host 端不受影响。
+  const slots = getService('slots')
   if (slots === undefined) { if (typeof window !== 'undefined') window.__PLAN_DIAG__ = { ...diag, fail: 'slots undefined' }; return }
-  const settingsScope = ctx.settingsScope || (ctx.get && ctx.get('settingsScope'))
+  const settingsScope = getService('settingsScope')
   if (settingsScope === undefined) { if (typeof window !== 'undefined') window.__PLAN_DIAG__ = { ...diag, fail: 'settingsScope undefined', slotsOk: true }; return }
   if (typeof window !== 'undefined') window.__PLAN_DIAG__ = { ...diag, proceed: true, slotsOk: true, settingsScopeOk: true }
 
@@ -89,13 +89,16 @@ function apply(ctx) {
           React.createElement('span', null, value[field] !== false ? labelOn : labelOff),
         )
 
+        const title = React.createElement('div', { style: { fontWeight: 600, fontSize: 14, marginBottom: 8 } }, '计划实施')
+
         if (loading) {
-          return React.createElement('div', { style: { padding: 12 } }, '加载设置中…')
+          return React.createElement('div', { style: { padding: 12 } }, title, '加载设置中…')
         }
 
         return React.createElement(
           'div',
           { style: { padding: 12, maxWidth: 480 } },
+          title,
           row('工作模式', '切换后重启生效；light/heavy 的计划文件互不可见', select('mode', ['light', 'heavy'])),
           row('默认进入流程', '需求模糊/多步骤任务是否默认进入流程（false = 仅触发词）；重启生效', toggle('autoTrigger', '开：默认进入', '关：仅触发词')),
           row('审计日志（heavy）', 'heavy 模式是否写 .plan/<slug>.log；light 模式无此文件；重启生效', toggle('auditLog', '开：记录日志', '关：不记录')),
