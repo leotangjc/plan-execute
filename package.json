@@ -10,7 +10,8 @@
     "cordis.patch.yml",
     "README.md",
     "ARCHITECTURE.md",
-    "LICENSE"
+    "LICENSE",
+    "docs"
   ],
   "dsh": {
     "bundle": {
