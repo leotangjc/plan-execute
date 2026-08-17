@@ -397,3 +397,68 @@ describe('execute：report / deviation / stop', () => {
     expect(after.deviations).toContain('blocked: T1 等上游')
   })
 })
+
+describe('settings 接入（rc.7 设置界面）', () => {
+  function makeCtxWithSettings(settingsValue: Record<string, unknown>) {
+    let registered: {
+      name?: string
+      output?: { render?: (...a: unknown[]) => unknown }
+      execute?: (args: unknown, exec: ExecCtx) => Promise<unknown>
+    } | null = null
+    let registeredSkill: { name?: string; content?: string } | null = null
+    const tools = { register(d: typeof registered) { registered = d; return () => {} } }
+    const skills = { register(s: typeof registeredSkill) { registeredSkill = s; return () => {} } }
+    let registeredNs: unknown
+    let registeredSchema: unknown
+    const settings = {
+      register(nsArg: unknown, schema: unknown, opts?: { base?: unknown }) {
+        registeredNs = nsArg
+        registeredSchema = schema
+        // 解析：opts.base.default 作为默认，settingsValue 覆盖
+        const base = (opts?.base as { default?: Record<string, unknown> })?.default ?? {}
+        const value = { ...base, ...settingsValue }
+        return { get: () => value }
+      },
+    }
+    const ctx = {
+      get(name: string) {
+        if (name === 'fs') return { resolve: async (p: string) => ({ targetKey: p, displayPath: p }), stat: async () => undefined, readText: async () => { throw new Error('ENOENT') }, writeText: async () => ({}) }
+        if (name === 'tools') return tools
+        if (name === 'skills') return skills
+        if (name === 'settings') return settings
+        return undefined
+      },
+      inject(names: string[], cb: (sctx: { settings: typeof settings }) => void) {
+        // 测试里同步执行 inject 回调
+        cb({ settings })
+      },
+      effect(cb: () => unknown) { return cb },
+      emit() {},
+      waterfall(_n: string, ...a: unknown[]) { const fb = a[a.length - 1]; return typeof fb === 'function' ? fb() : undefined },
+    }
+    return { ctx: ctx as never, getRegistered: () => registered, getSkill: () => registeredSkill, getRegisteredNs: () => registeredNs, getRegisteredSchema: () => registeredSchema }
+  }
+
+  it('settings 服务可用时：注册 namespace schema，mode 从设置读取', async () => {
+    const { ctx, getRegistered, getRegisteredNs, getRegisteredSchema } = makeCtxWithSettings({ mode: 'heavy' })
+    apply(ctx as never, {})
+    // inject 同步执行 → 工具应已注册（heavy 引擎）
+    expect(getRegistered()).not.toBeNull()
+    expect(getRegistered()!.name).toBe('plan_execute')
+    // namespace 注册了
+    expect(getRegisteredNs()).toBeTruthy()
+    expect(getRegisteredSchema()).toBeTruthy()
+    // mode=heavy → 工具描述是 heavy 版（含 record/section）
+    const desc = getRegistered()!.description || ''
+    expect(desc).toContain('record')
+  })
+
+  it('settings 不可用时回退组合 config（light 缺省）', async () => {
+    const { service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, CONFIG)
+    expect(getRegistered()!.name).toBe('plan_execute')
+    const desc = getRegistered()!.description || ''
+    expect(desc).toContain('confirm') // light 引擎动作
+  })
+})

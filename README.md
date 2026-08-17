@@ -53,7 +53,11 @@ dsh plugin --profile web add .
 
 **heavy 模式**：完整流程 grill（先问清楚）→ compile（两层确认）→ execute（执行验收），带审计日志和活动指针。
 
-**切模式**：preset 组合行加 `config.mode: heavy`（或省略用 light），重启生效。
+**切模式（两种方式）**：
+- **设置界面**（DSH rc.7+）：设置页 → 插件 → dsh-plan-execute → 选 light/heavy、开关 autoTrigger、改默认项目名——界面点选，无需改文件。
+- **preset 组合行**（老方式）：agent.cordis.yml 插件行加 `config.mode: heavy`（或省略用 light）。
+
+> 设置界面改完**重启生效**（mode 切换涉及文件契约不同，热切换有风险）。
 
 ## 记录存在哪
 
