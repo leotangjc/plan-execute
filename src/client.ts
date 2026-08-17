@@ -16,10 +16,22 @@
  */
 
 function apply(ctx) {
-  const slots = ctx.get('slots')
-  if (slots === undefined) return
-  const settingsScope = ctx.get('settingsScope')
-  if (settingsScope === undefined) return
+  // 诊断：记录 apply 执行路径（写到 window 供浏览器侧读取）
+  const diag = { called: true, hasGet: typeof ctx.get === 'function', slotsViaGet: undefined, slotsViaProp: undefined, settingsScopeViaGet: undefined, settingsScopeViaProp: undefined, error: undefined }
+  try {
+    diag.slotsViaGet = typeof ctx.get === 'function' ? typeof ctx.get('slots') : 'no-get'
+    diag.slotsViaProp = typeof ctx.slots
+    diag.settingsScopeViaGet = typeof ctx.get === 'function' ? typeof ctx.get('settingsScope') : 'no-get'
+    diag.settingsScopeViaProp = typeof ctx.settingsScope
+  } catch (e) { diag.error = String(e) }
+  if (typeof window !== 'undefined') window.__PLAN_DIAG__ = diag
+
+  // 与 dsh-notification 一致：用 ctx.slots 属性（declared-service access）
+  const slots = ctx.slots || (ctx.get && ctx.get('slots'))
+  if (slots === undefined) { if (typeof window !== 'undefined') window.__PLAN_DIAG__ = { ...diag, fail: 'slots undefined' }; return }
+  const settingsScope = ctx.settingsScope || (ctx.get && ctx.get('settingsScope'))
+  if (settingsScope === undefined) { if (typeof window !== 'undefined') window.__PLAN_DIAG__ = { ...diag, fail: 'settingsScope undefined', slotsOk: true }; return }
+  if (typeof window !== 'undefined') window.__PLAN_DIAG__ = { ...diag, proceed: true, slotsOk: true, settingsScopeOk: true }
 
   const NAMESPACE = 'dsh-plan-execute'
   const controller = settingsScope.bind({ namespace: NAMESPACE })
