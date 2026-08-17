@@ -1,104 +1,94 @@
-# dsh-plan-execute 结构设计（冻结版）
+# dsh-plan-execute 结构设计（arch-final / 面向普通用户版）
+
+> 本文档对应 `arch-final` 分支。设计经 heavy-reasoning 协议（3 生成 + 批判 + 破拆 + 父代理抽查）收敛，并基于真实 DSH fs 源码实证。
 
 ## 1. 一句话
 
-一个包 = 一个「记账本」工具 `plan_execute` + 一个「大脑」skill `plan-workflow`。
-一次 `dsh plugin add` 装齐；skill 决定「怎么想」，工具决定「记到哪、走到哪」。
+一个包 = 一个「闸门与统计」工具 `plan_execute` + 一个「大脑」skill `plan-workflow`。
+任务状态 = 项目 md 的勾选行；引擎只读 md、只写 meta，绝不覆盖已有计划。
 
-## 2. 分层与职责
+## 2. 职责边界（谁写什么——核心）
 
-| 层 | 实体 | 职责 | 明确不负责 |
-| --- | --- | --- | --- |
-| 大脑 | skill `plan-workflow`（注册进 skills 服务，随包发布） | 读代码、追问、抓矛盾、生成计划、判断验收、执行纪律、切阶段 | 落盘、记状态 |
-| 记账本 | 工具 `plan_execute`（状态机，Host） | 阶段指针、Q/A 记录、计划六字段、任务状态、里程碑报告、断点续跑 | 思考、判断 |
-
-铁律：工具只接收「最终确认的内容」；所有「改/拒绝/重问/抓矛盾」都在 skill↔用户 之间完成，绝不进工具。
-
-skill 正文独立于 `src/skill-content.ts`（避免与引擎状态机耦合）；正文内的停止词（结束/够了/结束拷问/stop/done、暂停/停/先暂停/先停）须与引擎 `ADVANCE_WORDS`/`PAUSE_WORDS` 保持同步，改词表时两处一起改。
-
-## 3. 工具（状态机）
-
-- 阶段：grill → compile → execute → done（`start` 续跑；`done`/无记录才重开）
-- 动作：start / answer / continue / report / stop
-- 喂数据口子：question · section+content · record · deviation · answer · phase · slug
-- 子状态（存 `.plan/<slug>.meta.json`）：phase / compileLayer / updatedAt / schema / tasks / deviations
-- `stop` 语义（v0.1.0 起与状态机表一致）：grill/compile 阶段 = 停留当前阶段（不置 done、不锁死）；execute 阶段 = 安全收尾置 done（快照保留）；done 阶段 = 提示无需停止。`stop` 不再无条件置 done。
-
-阶段衔接（自动）：grill 用户说「结束/够了/结束拷问」→ 工具切 compile（若 Unresolved Backlog 非空先暂缓一次，清空后才放行）并返回 compile 开场；
-compile 第二层确认 → 工具切 execute；execute「结束」→ done（终态）。
-说「暂停/停」停留在当前阶段（不推进），未决项写进 .grill 的 Unresolved Backlog。
-`continue` 仅用于断点续跑。
-进入 execute 有守门：仅当 meta 阶段为 execute（续跑）或 compile 两层确认完成（compileLayer=detail）才放行——显式 phase=execute 无法绕过未确认直达执行。
-
-报告：唯一入口 `action=report`（execute 阶段输出里程碑报告，其它阶段输出阶段指针）。
-
-## 4. 文件格式契约
-
-```
-.grill/<slug>.md        三段骨架：Confirmed Decisions / Constraints & Risks / Unresolved Backlog
-                        Q/A 对由工具记（编号）；另两段由主 agent 直接 write/edit 写
-.plan/<slug>.md         六字段（任务列表/依赖图/验收标准/风险与假设/未决项映射/里程碑）
-                        + 确认记录 + 执行状态 + 偏差记录
-                        六字段用 section+content 写；确认记录/执行状态/偏差记录由工具写
-.plan/<slug>.meta.json  阶段指针 + 任务/偏差结构化快照（机器读，report 唯一事实源；
-                        tasks/deviations 由 record/deviation 写；md 执行状态/偏差记录节仅展示；
-                        老计划无快照时报告显示暂无状态；含 schema 版本，旧版元数据给明确提示）
-.plan/<slug>.log        审计日志（每次调用 append 一行；机器/排错用）
-.plan/.current          活动 slug 指针（机器读）：非 start 调用漏传 slug 时兜底用最近一次的计划，
-                        仅当该 slug 确有状态文件时生效，否则回默认（防记错计划）
-```
-
-不对称原则：交给别人/别的 agent 消费的文件（`.plan` 六字段）需要格式强约束 → 工具写；
-内部工作笔记（`.grill` 另两段）格式可松 → 主 agent 直接写。
-
-## 5. 参数契约（公共 API，冻结；改动 = major bump）
-
-| 参数 | 含义 | 阶段 |
+| 实体 | 写什么 | 用什么保证 |
 | --- | --- | --- |
-| action | start/answer/continue/report/stop | 全程 |
-| phase | 指定阶段（grill/compile/execute） | 全程 |
-| slug | 项目标识（清洗为 [A-Za-z0-9_-]，缺省 plan；纯非 ASCII 名 → plan-短哈希，旧版落盘的默认 plan 状态可用显式 slug=plan 续跑） | 全程 |
-| answer | 用户对上一题的最终答复 | grill/compile/execute |
-| question | 主 agent 提的问题（本次 answer 对应） | grill |
-| section + content | 写计划六字段 | compile/execute |
-| record | 任务状态「任务ID 状态 [原因]」 | execute |
-| deviation | 记录一条与计划的偏差 | execute |
+| skill `plan-workflow` | `<slug>.md`：任务列表（`- [x] T1: 标题`）+ 执行记录 | 模型工具写（无原子守卫，可接受——md 不是机器真相） |
+| 引擎 `plan_execute` | `.plan/<slug>.meta.json`：phase + deviations | writeText + `replaceIfVersion` 版本守卫（已实证真实签名） |
+| 引擎只读 | `<slug>.md` 任务行（`TASK_LINE` 行首锚定解析） | 只读无守卫 |
 
-插件配置（组合行 `config`）：`autoTrigger: boolean`（缺省 true）——true = 需求模糊/多步骤/项目级新任务默认进入流程；false = 仅触发词进入。
+**单一写者原则**：md 的写者只有 skill（引擎永不写 md）；meta 的写者只有引擎（skill 永不写 meta）。两端互不越界，杜绝「双写竞态」（R2 死法）。
 
-## 6. skill `plan-workflow` 内容大纲
+**状态真相 = md 勾选行**：`[x]` = 完成、`[ ]` = 未完成。用户看 md 即知进度；skill 忘勾 = 用户看得见 + 收尾闸门阻塞（R1「忘 record」死法结构性免疫）。
 
-1. Role（编排者 + 主执行者，用户是唯一决策者）
-2. 触发性（需求模糊/多步骤/项目级默认进入 + 触发词 + 「直接做」逃生门）+ 回合纪律（每轮一个动作、问完停等用户）
-3. 铁律（工具只收最终确认内容；永不替用户决策；永不改已确认计划）
-4. 总流程 + 参数速查表
-5. 阶段一 grill（读代码→一次一问→依赖序→抓矛盾→TBD 标 blocker/defer→结束）
-6. 阶段二 compile（生成六字段→写盘→校验→两层确认→改只重派生）
-7. 阶段三 execute（串行执行→可观察验收→record/deviation→report→停止条件）
-8. 中断与修改（改文件 / phase 重置 / 删文件重来 / 改什么重确认什么）
+## 3. 文件契约（每项目 ≤2 文件）
 
-## 7. 测试
+```
+<slug>.md                # 用户看进度的仪表盘 + skill 工作台（人读，可交付）
+# 执行计划
+## 任务列表
+- [ ] T1: 建页面          # 任务行格式：- [ ]/[x] + 空格 + T编号 + 冒号 + 标题
+- [x] T2: 接接口          # 容忍全角冒号/大写 X/行首空白；无编号的备注行不算任务
+.plan/<slug>.meta.json   # 引擎写：phase + slug + updatedAt + deviations[]
+                         # deviations 元素形如 "failed: T1 原因" / "blocked: T2 原因" / 自由文本
+```
 
-- 工具层：状态机、自动衔接、报告、落盘、slug 清洗、record 去重、skill 注册；
-- skill 正文：提示词无法单测，靠「结构审查 + 与参数契约一致性」人工核对。
+- 无 `.current`（slug 必带，不带落默认 plan）
+- 无 `.log`（审计非需求）
+- 无锁文件（跨进程写保护：md 靠「同一计划单会话」约定；meta 靠 replaceIfVersion 版本守卫）
+- 无 schema 版本（新格式起步）
 
-## 8. 明确不做（记录在案，避免回头纠结）
+## 4. 状态机（4 态，phase 存 meta）
 
-- 插件不做读代码/生成计划/验收判断/执行纪律（归 skill）；
-- 不内置任何题目（无固定题库，grill 必须由主 agent 用 question 喂题）；
-- 不做任务级崩溃恢复、不做撤销/回滚（建议 workspace 放 git）；
-- 不改用户本地三个原 skill 文件；
-- 不新增「配置旋钮」：maxGrillQuestions / stopWords 可配置 / reportStyle 均为 YAGNI（对抗审查证伪），停止词与流程语义用内置规则修；
-- 不保留中文 slug（保 ASCII + 哈希兜底：中文项目名 → plan-短哈希；可读性靠 skill 建议 ASCII 命名）；
-- 非 execute 阶段 report 只给阶段指针，不输出决策摘要（避免每轮一屏噪音）。
+```
+start（compile）→ skill 写 md 任务列表 → confirm（校验 ≥1 任务行 → execute）
+→ 逐任务执行（skill 改 [x] / deviation 记失败卡住）→ stop（收尾闸门 → done）
+→ continue 续跑；continue&phase=compile 回退重编译
+```
 
-## 9. 防御设计（批次1+2）
+- **grill 不落盘**（问答纯对话；确认的决策由 skill 固化成任务列表）
+- **start 防覆盖**：md 或 meta 任一存在即拒（不依赖顺序假设）；createIfAbsent 原子兜底（内核 link EEXIST，跨进程真原子，已实证）
+- **confirm 守门**：md 无任务行不放行
+- **stop 收尾闸门**：未勾任务列出阻塞、不置 done——静默缺失结构性不可能
 
-- 版本指纹：`src/version.ts` 导出 VERSION，工具描述与报告首行带 `v<版本>`；**改 package.json 版本号时必须同步 src/version.ts**（测试断言两者一致）。
-- writeMeta 合并语义（V-01 修复）：所有阶段转换/收尾/重开写 meta 时保留旧 tasks/deviations 快照（内部先读旧值再合并），断点续跑不再清空 report 事实源；损坏 meta（JSON 解析失败）先备份 `.corrupt-<时间戳>` 再写入，不静默覆盖。
-- 停止词判定（V-03 修复）：grill 阶段带 question 的回答一律按内容 Q/A 记录，不触发「结束/够了/暂停」等控制词——控制词仅对不带 question 的 answer 生效，避免「预算够了吗→够了」被误判推进。
-- 参数组合前置校验：section↔content 成对、record/section/deviation 互斥，非法组合立即报错不落盘；计划字段 section 仅在 compile/execute 阶段可写。
-- 状态摘要：record/deviation 返回附当前计数，供模型自纠。
-- schema 守卫：writeMeta 一律写 `schema: 2`；比当前 schema 旧的元数据在报告时给出明确提示（不静默走老逻辑）。
-- 审计日志：每次调用 append 到 `.plan/<slug>.log`（保留最近 500 行）。
-- skill 正文快照测试：`buildSkillContent(true/false)` 有 snapshot，改文案需显式 `-u` 更新。
+## 5. 报告（report）
+
+- 进度 = 数 md 勾选行（`done/total`，永远与用户看见的 md 一致）
+- failed/blocked = 解析 meta.deviations 的 `类型: 文本` 前缀
+- 无任务 → 提示先写 md
+
+## 6. 参数契约
+
+| 参数 | 含义 |
+| --- | --- |
+| action | start / confirm / deviation / report / stop / continue |
+| slug | 项目标识（每次必带；清洗 [A-Za-z0-9_-]，缺省 plan） |
+| deviation | 偏差文本（`failed: T1 原因` / `blocked: T2 原因` / 自由文本） |
+| phase | 可选，continue 回退指定阶段 |
+
+插件配置：`autoTrigger: boolean`（缺省 true）。
+
+## 7. 已实证的真实 fs 语义（设计依据，非假设）
+
+- writeText 原子写（temp+rename），第 3 参 expected 支持 `{kind:'createIfAbsent'}`（已存在→FS_NOT_OBSERVED）与 `{kind:'replaceIfVersion', version}`（版本不符→FS_STALE_VERSION）
+- editText 原子读改写 + 裸 `{version}` 版本检查
+- stat 返回 `{version, type, size}`，version 由 stat 现算（重启可续）
+- resolve 永不返回 undefined；不存在由 stat 探测
+- withLock 进程内（跨进程无效）→ 引擎写 meta 用版本守卫而非锁
+- **模型工具层不暴露 createIfAbsent/replaceIfVersion 参数**（writeText 第 3 参来自 waterfall intent）→ 引擎是唯一能拿到 fs 级硬原子守卫的路径（「引擎值得存在」的实证依据）
+
+## 8. 测试（20 个）
+
+memFs 镜像真实 fs 语义（createIfAbsent/replaceIfVersion/stat 版本号）。覆盖：契约、防覆盖（md/meta 双检查）、confirm 守门、report 现算、md 手改=用户决定、备注行不算任务、deviation 类型前缀、收尾闸门、stop 置 done、continue 回退、版本守卫链、skill 快照。
+
+## 9. 明确不做
+
+- 引擎不写 md、不解析 md 除任务行外的内容、不替 skill 记任务状态
+- 不做两层确认/六字段/backlog 守门/审计日志/活动指针/损坏备份（均为 main 完整版机制，arch-final 砍掉）
+- 不做多会话并发写 md 防护（文档化「同一计划单会话」）
+- 不做计划质量校验（依赖无环等，归 skill）
+
+## 10. 已知限制（接受项）
+
+- skill 忘勾 → 进度少一项 + 收尾闸门拦（可见，不静默）
+- 计划阶段漏写任务 → 闸门查不到（靠用户看 md 发现）
+- 跨进程并发跑同计划 → md 后写覆盖先写（文档化限制）
+- 彻底重来 → 删 md + meta 或换 slug

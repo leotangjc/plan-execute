@@ -1,28 +1,29 @@
 /**
- * dsh-plan-execute — 「计划实施」三合一编排引擎的「记账本」
+ * dsh-plan-execute — 「计划实施」编排引擎（arch-final / 面向普通用户版）
  *
  * 一个包两个实体：
- * - 工具 `plan_execute`：状态机 + 文件落盘 + 里程碑报告（本文件）
+ * - 工具 `plan_execute`：闸门 + 统计 + 防覆盖（本文件）
  * - skill `plan-workflow`：编排大脑（apply 内注册，正文见 src/skill-content.ts）
  *
- * 状态落在调用会话工作目录的 `.grill/` 与 `.plan/` 文件里，可断点续跑。
- * 只通过文档化扩展接缝注册：`ctx.tools`（工具）+ `ctx.get('fs')`（落盘）+
- * `ctx.get('skills')`（skill）。文件读写遵循 DSH 的 fs 观察策略（会话 cwd +
- * `fs/write-intent` + `fs/observed`）。
+ * 设计核心（heavy-reasoning 收敛 + 两遍核验）：
+ * - 状态真相 = md 勾选行：`- [x] T1: 标题`（skill 写，用户只看不改，引擎只读）。
+ *   → 结构性免疫「skill 忘 record」：忘勾 = 用户看得见 + 收尾闸门阻塞，绝不静默缺失。
+ * - 引擎职责 = 闸门与守卫：start 防覆盖（md/meta 任一存在即拒 + createIfAbsent 原子兜底）、
+ *   confirm 推进（校验有任务行）、report 现算统计（永远与用户看见的 md 一致）、
+ *   stop 收尾闸门、deviation 记偏差（引擎唯一写者 + 版本守卫）。
+ * - failed/blocked 用 deviation 带类型前缀表达（md 保持标准两态，普通用户语义）。
+ * - 引擎写 meta 一律 writeText + replaceIfVersion 版本守卫（跨进程安全，已实证）。
  *
  * @module dsh-plan-execute
  */
 import type { Context } from '@deepseek-ai/cordis';
 export declare const name = "dsh-plan-execute";
-/** Services required before this plugin can register. */
 export declare const inject: string[];
 /** 插件配置；全部可选，缺省值在 apply 内合并。 */
 export interface PlanExecuteConfig {
     /** 项目/计划标识缺省值（缺省 'plan'） */
     defaultSlug?: string;
-    /** 拷问决策记录目录（缺省 '.grill'） */
-    grillDir?: string;
-    /** 执行计划与阶段指针目录（缺省 '.plan'） */
+    /** 执行计划目录（缺省 '.plan'，存放 <slug>.meta.json） */
     planDir?: string;
     /** 默认触发模式：需求模糊/多步骤/项目级新任务默认进入流程（true），否则仅触发词触发（false）。缺省 true。 */
     autoTrigger?: boolean;
@@ -41,13 +42,26 @@ export interface SkillsService {
         content: string;
     }): () => void;
 }
-/** 结构性镜像：DSH fs 服务。 */
-export interface FsInfo {
-    version?: unknown;
-}
+/** 结构性镜像：DSH fs 服务（真实签名，已实证：writeText 第3参 expected、editText 原子读改写）。 */
 export interface FsTarget {
     targetKey: string;
     displayPath: string;
+}
+export interface FsInfo {
+    version?: unknown;
+    type?: string;
+    size?: number;
+}
+export type FsWriteExpected = {
+    kind: 'createIfAbsent';
+} | {
+    kind: 'replaceIfVersion';
+    version: unknown;
+};
+export interface FsEditRequest {
+    oldString: string;
+    newString: string;
+    replaceAll?: boolean;
 }
 export interface FsService {
     resolve(path: string, opts?: {
@@ -55,7 +69,12 @@ export interface FsService {
     }): Promise<FsTarget | undefined>;
     stat(target: FsTarget, signal?: AbortSignal): Promise<FsInfo | undefined>;
     readText(target: FsTarget, signal?: AbortSignal): Promise<string>;
-    writeText(target: FsTarget, content: string, intent?: unknown, signal?: AbortSignal, sandboxPolicy?: unknown): Promise<{
+    writeText(target: FsTarget, content: string, expected?: FsWriteExpected, signal?: AbortSignal, sandboxPolicy?: unknown): Promise<{
+        version?: unknown;
+    }>;
+    editText(target: FsTarget, edit: FsEditRequest, expected?: {
+        version: unknown;
+    }, signal?: AbortSignal, sandboxPolicy?: unknown): Promise<{
         version?: unknown;
     }>;
 }
@@ -79,8 +98,8 @@ export interface ExecCtx {
         };
     };
 }
-export type Phase = 'grill' | 'compile' | 'execute' | 'done';
-export type NextAction = 'start' | 'answer' | 'continue' | 'report' | 'stop';
+export type Phase = 'compile' | 'execute' | 'done';
+export type NextAction = 'start' | 'confirm' | 'report' | 'deviation' | 'stop' | 'continue';
 export interface StepResult {
     text: string;
     nextAction: NextAction;
