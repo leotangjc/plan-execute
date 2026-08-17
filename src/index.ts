@@ -58,11 +58,11 @@ export function apply(ctx: Context, _config: PlanExecuteConfig = {}) {
       register(ns: unknown, schema: unknown, opts?: { base?: unknown }): { get(): PlanExecuteSettings }
     }
     const scope = settingsService.register(ns(), PlanExecuteSettingsSchema, {
-      base: { default: { mode: _config.mode, autoTrigger: _config.autoTrigger, defaultSlug: _config.defaultSlug } },
+      base: { default: { mode: _config.mode, autoTrigger: _config.autoTrigger, auditLog: _config.auditLog } },
     })
     const resolved = scope.get()
     const mode = resolved?.mode === 'heavy' ? 'heavy' : 'light'
-    dispatch(ctx, { ..._config, mode: resolved?.mode, autoTrigger: resolved?.autoTrigger, defaultSlug: resolved?.defaultSlug }, mode)
+    dispatch(ctx, { ..._config, mode: resolved?.mode, autoTrigger: resolved?.autoTrigger, auditLog: resolved?.auditLog }, mode)
   })
 }
 

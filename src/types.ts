@@ -15,6 +15,8 @@ export interface PlanExecuteConfig {
   planDir?: string
   /** 默认触发模式：需求模糊/多步骤/项目级新任务默认进入流程（true），否则仅触发词触发（false）。缺省 true。 */
   autoTrigger?: boolean
+  /** 审计日志开关（heavy 模式 .plan/<slug>.log；light 模式无此文件）。缺省 true。 */
+  auditLog?: boolean
 }
 
 /** 结构性镜像：DSH tools 注册表。 */

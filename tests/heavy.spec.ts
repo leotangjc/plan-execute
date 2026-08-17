@@ -830,3 +830,26 @@ describe('缺陷修复回归（heavy-reasoning 审查 v0.1.0）', () => {
     expect(r.phase).toBe('compile')
   })
 })
+
+describe('设置项 auditLog（审计日志开关）', () => {
+  it('auditLog=false 时不写 .log 文件（默认 true 时写）', async () => {
+    const { files, service } = memFs()
+    const { ctx, getRegistered } = makeCtx(service)
+    apply(ctx, { ...CONFIG, auditLog: false })
+    const execute = await executeOf(getRegistered())
+
+    await execute({ action: 'start', slug: 'proj' })
+    await execute({ action: 'answer', question: 'Q1?', answer: 'A1' })
+    // 关日志 → 无 .log 文件
+    expect(Array.from(files.keys()).some((k) => k.endsWith('.log'))).toBe(false)
+
+    // 对照组：默认（开）写 .log
+    const { files: f2, service: s2 } = memFs()
+    const { ctx: c2, getRegistered: g2 } = makeCtx(s2)
+    apply(c2, { ...CONFIG, auditLog: true })
+    const ex2 = await executeOf(g2())
+    await ex2({ action: 'start', slug: 'proj' })
+    await ex2({ action: 'answer', question: 'Q1?', answer: 'A1' })
+    expect(Array.from(f2.keys()).some((k) => k.endsWith('.log'))).toBe(true)
+  })
+})

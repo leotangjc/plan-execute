@@ -68,6 +68,7 @@ export function applyHeavy(ctx: Context, _config: PlanExecuteConfig = {}) {
     grillDir: '.grill',
     planDir: '.plan',
     autoTrigger: true,
+    auditLog: true,
     ..._config,
   }
   const fs = ctx.get('fs') as FsService | undefined
@@ -695,7 +696,10 @@ export function applyHeavy(ctx: Context, _config: PlanExecuteConfig = {}) {
     if (!explicitSlug && act !== 'start' && result.slug !== config.defaultSlug) {
       result.text = `（沿用最近计划 ${result.slug}；多计划请显式传 slug）\n` + result.text
     }
-    await appendLog(act, result, exec).catch(() => {})
+    // 审计日志开关（设置项 auditLog，缺省开）：关闭时不写 .plan/<slug>.log
+    if (config.auditLog) {
+      await appendLog(act, result, exec).catch(() => {})
+    }
     return result
   }
 
